@@ -166,6 +166,42 @@ def _check_foreign_totals(df: pd.DataFrame) -> None:
         print(f"  국가별 입도객 API와 대조: {len(merged)}건 중 불일치 {len(bad)}건")
 
 
+def airport_passengers_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"기준일(월)": str})
+    key = ["기준일(월)", "공항", "도착출발구분"]
+    # 원본은 2024-08 이후의 모든 행이 두 번씩 들어 있다. 값이 다르면 어느 쪽이 맞는지 알 수 없으므로 멈춘다
+    conflict = df.groupby(key)["이용자수(명)"].nunique().gt(1).sum()
+    if conflict:
+        raise ValueError(f"{srcs[0].name}: 같은 조건에 값이 다른 행 {conflict}개")
+    unique = df.drop_duplicates()
+    print(f"  중복 제거: {len(df) - len(unique)}행")
+    result = pd.DataFrame(
+        {
+            "dtYearMonth": _month_start(unique["기준일(월)"], "%Y%m"),
+            "airport": unique["공항"],
+            "direction": unique["도착출발구분"],
+            "passengerCnt": unique["이용자수(명)"],
+        }
+    )
+    _save_df(result, out)
+
+
+def ferry_passengers_yearly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="cp949")
+    # 일반+섬주민이 합계와 맞지 않는 행이 있어 합계만 쓴다
+    result = pd.DataFrame(
+        {
+            "baseYear": df["기준일(년)"],
+            "shipName": df["선박명"],
+            "route": df["항로"],
+            "routeType": df["항로"].str.startswith("제주-").map({True: "제주-뭍", False: "도내"}),
+            "capacity": df["여객정원"],
+            "passengerCnt": df["여객수송실적(합계)"],
+        }
+    )
+    _save_df(result, out)
+
+
 def _gaps(days: list[date]) -> str:
     out = []
     for a, b in zip(days, days[1:]):
@@ -283,6 +319,16 @@ DATASETS = {
         "외국인 관광객 입도 통계 2024~2025 (국가별, 제주·전국)",
         ("제주관광공사_제주방문관광객_통계_20251231.xlsx",),
         foreign_visitors_monthly,
+    ),
+    "airport_passengers_monthly": Dataset(
+        "국내 공항별 월별 이용자 (도착·출발)",
+        ("국내 공항별 운항 통계(이용자).csv",),
+        airport_passengers_monthly,
+    ),
+    "ferry_passengers_yearly": Dataset(
+        "제주 여객선 연간 수송 인원 (선박·항로별)",
+        ("제주특별자치도여객선수송통계(여객).csv",),
+        ferry_passengers_yearly,
     ),
     "bus_hourly": Dataset(
         "일별 시간대별 버스 승차 인원",
