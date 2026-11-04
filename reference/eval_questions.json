@@ -1,0 +1,245 @@
+{
+  "description": "에이전트 시험 문제. checks 의 값은 분석 도구와 별개로 SQL로 계산한 기대값이다. scripts/check_eval_questions.py 로 DB와 대조한다.",
+  "questions": [
+    {
+      "id": "Q01",
+      "feature": "F1",
+      "persona": "처음 온 사람",
+      "question": "관광 관련 데이터 뭐가 있어?",
+      "expectedTools": ["find_data"],
+      "expectedAnswer": "사용 중인 데이터를 주제별로 추천하고 항목과 기간을 설명한다. 건수를 고정해서 말하지 않고 카탈로그에서 읽는다.",
+      "mustMention": ["관광지 입장객", "입도객"],
+      "limits": ["센터 전용 데이터는 명세만 있어 값을 계산할 수 없다"],
+      "checks": [
+        {
+          "label": "관광지 월별 자료 시작",
+          "sql": "SELECT strftime(startDate, '%Y-%m') FROM data_catalog WHERE id = 'spot_visitors_monthly'",
+          "expected": "2009-01"
+        },
+        {
+          "label": "관광지 월별 자료 끝",
+          "sql": "SELECT strftime(endDate, '%Y-%m') FROM data_catalog WHERE id = 'spot_visitors_monthly'",
+          "expected": "2024-12"
+        }
+      ]
+    },
+    {
+      "id": "Q02",
+      "feature": "F1",
+      "persona": "소상공인",
+      "question": "관광객 카드 소비 데이터도 볼 수 있어?",
+      "expectedTools": ["find_data", "describe_data"],
+      "expectedAnswer": "카드 이용 데이터는 제주빅데이터센터 전용으로 명세만 있어 지금은 금액을 계산할 수 없다고 답하고, 해당 명세 항목을 안내한다. 금액을 지어내지 않는다.",
+      "mustMention": ["센터", "카드"],
+      "limits": ["명세만 있고 데이터 자체는 없다"],
+      "checks": [
+        {
+          "label": "내국인 카드 이용 현황은 반출 불가",
+          "sql": "SELECT exportable FROM center_datasets WHERE centerNo = '1-01'",
+          "expected": false
+        }
+      ]
+    },
+    {
+      "id": "Q03",
+      "feature": "F2",
+      "persona": "소상공인",
+      "question": "2024년에 사람이 가장 많이 간 관광지 5곳 알려줘",
+      "expectedTools": ["rank_values"],
+      "expectedAnswer": "한라산국립공원 928,409명, 성산일출봉 906,188명, 천지연폭포 890,241명, 중문대포해안주상절리대 816,210명, 카멜리아힐 774,153명. 내국인과 외국인을 합친 값이다.",
+      "mustMention": ["한라산국립공원", "성산일출봉", "천지연폭포", "중문대포해안주상절리대", "카멜리아힐"],
+      "limits": ["입장 집계가 있는 관광지만 포함하고 무료·미집계 지점은 빠진다"],
+      "checks": [
+        {
+          "label": "상위 5곳과 입장객",
+          "sql": "SELECT string_agg(spotName || ':' || t, ', ' ORDER BY t DESC) FROM (SELECT spotName, sum(visitorCnt)::BIGINT AS t FROM spot_visitors_view WHERE year = 2024 GROUP BY 1 ORDER BY t DESC LIMIT 5)",
+          "expected": "한라산국립공원:928409, 성산일출봉:906188, 천지연폭포:890241, 중문대포해안주상절리대:816210, 카멜리아힐:774153"
+        }
+      ]
+    },
+    {
+      "id": "Q04",
+      "feature": "F2",
+      "persona": "도민·연구자",
+      "question": "레저 목적 입도객은 요즘 늘었어?",
+      "expectedTools": ["get_trend"],
+      "expectedAnswer": "늘지 않았다. 최근 12개월(2024-08~2025-07) 1,276,626명으로 그 전 12개월 1,499,257명보다 14.8% 줄었다. 연간으로는 2023년 1,591,635명에서 2024년 1,321,675명으로 줄었다.",
+      "mustMention": ["레저스포츠", "14.8%"],
+      "limits": ["자료가 2021-08~2025-07뿐이라 코로나 전과 비교할 수 없다", "2021년과 2025년은 일부 달만 있어 연간 합계를 비교하지 않는다"],
+      "checks": [
+        {
+          "label": "최근 12개월",
+          "sql": "SELECT sum(visitorCnt)::BIGINT FROM visit_purpose WHERE visitPurpose = '레저스포츠' AND dtYearMonth BETWEEN DATE '2024-08-01' AND DATE '2025-07-01'",
+          "expected": 1276626
+        },
+        {
+          "label": "그 전 12개월",
+          "sql": "SELECT sum(visitorCnt)::BIGINT FROM visit_purpose WHERE visitPurpose = '레저스포츠' AND dtYearMonth BETWEEN DATE '2023-08-01' AND DATE '2024-07-01'",
+          "expected": 1499257
+        },
+        {
+          "label": "증감률(%)",
+          "sql": "SELECT round(100.0 * (sum(visitorCnt) FILTER (WHERE dtYearMonth >= DATE '2024-08-01') / sum(visitorCnt) FILTER (WHERE dtYearMonth < DATE '2024-08-01') - 1), 1) FROM visit_purpose WHERE visitPurpose = '레저스포츠' AND dtYearMonth BETWEEN DATE '2023-08-01' AND DATE '2025-07-01'",
+          "expected": -14.8
+        }
+      ]
+    },
+    {
+      "id": "Q05",
+      "feature": "F2",
+      "persona": "관광 담당 공무원",
+      "question": "2024년 제주 입도객은 전부 몇 명이야?",
+      "expectedTools": ["get_trend"],
+      "expectedAnswer": "13,767,350명 (내국인 11,861,654명, 외국인 1,905,696명).",
+      "mustMention": ["13,767,350"],
+      "limits": ["방문목적과 여행형태 표를 그대로 더하면 내국인이 두 번 세어져 틀린다 (23,723,308명)"],
+      "trap": "visit_purpose 전체 합 23,723,308은 오답이다",
+      "checks": [
+        {
+          "label": "2024 입도객 합계",
+          "sql": "SELECT sum(totalCnt)::BIGINT FROM arrivals_monthly WHERE year(dtYearMonth) = 2024",
+          "expected": 13767350
+        },
+        {
+          "label": "2024 내국인",
+          "sql": "SELECT sum(domesticCnt)::BIGINT FROM arrivals_monthly WHERE year(dtYearMonth) = 2024",
+          "expected": 11861654
+        },
+        {
+          "label": "2024 외국인",
+          "sql": "SELECT sum(foreignCnt)::BIGINT FROM arrivals_monthly WHERE year(dtYearMonth) = 2024",
+          "expected": 1905696
+        }
+      ]
+    },
+    {
+      "id": "Q06",
+      "feature": "F3",
+      "persona": "관광 담당 공무원",
+      "question": "2024년에 코로나 전(2019)보다 회복된 관광지는?",
+      "expectedTools": ["compare_periods"],
+      "expectedAnswer": "비교 가능한 27곳 중 6곳이다. 서복전시관 323.1%, 제주도립 김창열미술관 167.6%, 한라산국립공원 109.4%, 제주돌문화공원 109.0%, 카멜리아힐 107.7%, 국립제주박물관 100.2%.",
+      "mustMention": ["27곳", "6곳", "한라산국립공원"],
+      "limits": ["두 해 모두 12개월 입장객이 있는 곳만 비교한다", "2024년 값이 0인 곳은 휴장·미집계일 수 있어 회복률을 계산하지 않는다 (예: 만장굴관광지)", "서복전시관처럼 2019년 값이 작은 곳은 비율이 크게 나온다"],
+      "trap": "빈 달이나 0인 달을 포함해 계산하면 회복률이 틀린다",
+      "checks": [
+        {
+          "label": "비교 가능 관광지 수",
+          "sql": "WITH m AS (SELECT spotName, year, month, sum(visitorCnt) AS v FROM spot_visitors_view WHERE year IN (2019, 2024) GROUP BY ALL), y AS (SELECT spotName, sum(v) FILTER (WHERE year = 2019) AS a, sum(v) FILTER (WHERE year = 2024) AS b FROM m GROUP BY spotName HAVING count(*) FILTER (WHERE year = 2019 AND v > 0) = 12 AND count(*) FILTER (WHERE year = 2024 AND v > 0) = 12) SELECT count(*) FROM y",
+          "expected": 27
+        },
+        {
+          "label": "회복된 관광지",
+          "sql": "WITH m AS (SELECT spotName, year, month, sum(visitorCnt) AS v FROM spot_visitors_view WHERE year IN (2019, 2024) GROUP BY ALL), y AS (SELECT spotName, sum(v) FILTER (WHERE year = 2019) AS a, sum(v) FILTER (WHERE year = 2024) AS b FROM m GROUP BY spotName HAVING count(*) FILTER (WHERE year = 2019 AND v > 0) = 12 AND count(*) FILTER (WHERE year = 2024 AND v > 0) = 12) SELECT string_agg(spotName || ':' || round(100.0 * b / a, 1), ', ' ORDER BY b / a DESC) FROM y WHERE b >= a",
+          "expected": "서복전시관:323.1, 제주도립 김창열미술관:167.6, 한라산국립공원:109.4, 제주돌문화공원:109.0, 카멜리아힐:107.7, 국립제주박물관:100.2"
+        }
+      ]
+    },
+    {
+      "id": "Q07",
+      "feature": "F3",
+      "persona": "관광 담당 공무원",
+      "question": "제주 입도객이 2019년 수준으로 회복됐어?",
+      "expectedTools": ["compare_periods"],
+      "expectedAnswer": "입도객 자료는 2021-08부터라 2019년과 직접 비교할 수 없다고 먼저 밝힌다. 대신 제주 공항 도착 이용자를 보면 2024년 14,798,780명으로 2019년 15,657,540명의 94.5%다.",
+      "mustMention": ["2021-08", "항공 이용자", "94.5%"],
+      "limits": ["공항 이용자는 도민을 포함하고 배편을 포함하지 않아 입도객 수가 아니다"],
+      "trap": "공항 이용자를 입도객이라고 부르면 오답이다",
+      "checks": [
+        {
+          "label": "입도객 자료 시작",
+          "sql": "SELECT strftime(min(dtYearMonth), '%Y-%m') FROM arrivals_monthly",
+          "expected": "2021-08"
+        },
+        {
+          "label": "2019 제주 도착",
+          "sql": "SELECT sum(passengerCnt)::BIGINT FROM airport_passengers_monthly WHERE airport = '제주' AND direction = '도착' AND year(dtYearMonth) = 2019",
+          "expected": 15657540
+        },
+        {
+          "label": "2024 제주 도착",
+          "sql": "SELECT sum(passengerCnt)::BIGINT FROM airport_passengers_monthly WHERE airport = '제주' AND direction = '도착' AND year(dtYearMonth) = 2024",
+          "expected": 14798780
+        },
+        {
+          "label": "2019 대비(%)",
+          "sql": "SELECT round(100.0 * sum(passengerCnt) FILTER (WHERE year(dtYearMonth) = 2024) / sum(passengerCnt) FILTER (WHERE year(dtYearMonth) = 2019), 1) FROM airport_passengers_monthly WHERE airport = '제주' AND direction = '도착'",
+          "expected": 94.5
+        }
+      ]
+    },
+    {
+      "id": "Q08",
+      "feature": "F4",
+      "persona": "소상공인",
+      "question": "서귀포 관광지 방문객은 몇 월에 가장 많아?",
+      "expectedTools": ["get_seasonality"],
+      "expectedAnswer": "2024년 기준 5월이 707,156명으로 가장 많고 10월이 684,359명으로 다음이다. 봄과 가을 두 번 붐빈다. 해마다 1위 달이 바뀌므로 5월 하나로 단정하지 않는다. 2022~2024년 내내 자료가 있는 12곳 평균으로는 10월이 가장 많다.",
+      "mustMention": ["5월", "10월"],
+      "limits": ["해마다 자료가 있는 관광지 수가 달라 2024년 월별 값은 16~19곳의 합이다", "2020~2021년은 코로나 영향으로 패턴이 다르다"],
+      "checks": [
+        {
+          "label": "2024 최대 달과 값",
+          "sql": "SELECT arg_max(month, v) || ':' || max(v)::BIGINT FROM (SELECT month, sum(visitorCnt) AS v FROM spot_visitors_view WHERE sigungu = '서귀포시' AND year = 2024 GROUP BY month)",
+          "expected": "5:707156"
+        },
+        {
+          "label": "2024 10월",
+          "sql": "SELECT sum(visitorCnt)::BIGINT FROM spot_visitors_view WHERE sigungu = '서귀포시' AND year = 2024 AND month = 10",
+          "expected": 684359
+        },
+        {
+          "label": "같은 12곳 2022~2024 평균 최대 달",
+          "sql": "WITH s AS (SELECT spotName FROM spot_visitors_view WHERE sigungu = '서귀포시' AND year BETWEEN 2022 AND 2024 GROUP BY spotName HAVING count(DISTINCT year || '-' || month) = 36), m AS (SELECT year, month, sum(visitorCnt) AS v FROM spot_visitors_view JOIN s USING (spotName) WHERE year BETWEEN 2022 AND 2024 GROUP BY year, month), a AS (SELECT month, avg(v) AS v FROM m GROUP BY month) SELECT (SELECT count(*) FROM s) || '곳:' || arg_max(month, v) FROM a",
+          "expected": "12곳:10"
+        }
+      ]
+    },
+    {
+      "id": "Q09",
+      "feature": "F5",
+      "persona": "도민·연구자",
+      "question": "비 오는 날 버스 승차가 얼마나 줄어?",
+      "expectedTools": ["analyze_weather_effect"],
+      "expectedAnswer": "같은 해·같은 달·같은 평일/휴일 구분의 비 안 온 날(1mm 미만)과 비교하면 1~10mm 날 1.9%, 10~30mm 날 4.9%, 30mm 이상 날 10.8% 줄었다. 비가 많이 올수록 많이 줄었다.",
+      "mustMention": ["1.9%", "4.9%", "10.8%"],
+      "limits": ["원본 누락·중복으로 보이는 이상일은 뺐다", "강수량은 4개 관측소 평균이다", "함께 나타나는 관계이며 비가 원인이라고 단정하지 않는다"],
+      "trap": "bus_boarding_daily 를 그대로 쓰면 이상일이 들어가 틀린다. 계절·요일을 맞추지 않고 비교해도 틀린다",
+      "checks": [
+        {
+          "label": "강수 구간별 일수와 증감률(%)",
+          "sql": "WITH b AS (SELECT *, CASE WHEN rainMm < 1 THEN '0' WHEN rainMm < 10 THEN '1~10' WHEN rainMm < 30 THEN '10~30' ELSE '30+' END AS g FROM bus_weather_daily), base AS (SELECT year, month, isOffDay, avg(boardingCnt) FILTER (WHERE rainMm < 1) AS dry FROM b GROUP BY ALL), r AS (SELECT g, min(rainMm) AS lo, count(*) AS n, round(100 * (avg(boardingCnt / dry) - 1), 1) AS pct FROM b JOIN base USING (year, month, isOffDay) WHERE dry IS NOT NULL AND g <> '0' GROUP BY g) SELECT string_agg(g || ':' || n || '일:' || pct, ', ' ORDER BY lo) FROM r",
+          "expected": "1~10:380일:-1.9, 10~30:175일:-4.9, 30+:103일:-10.8"
+        }
+      ]
+    },
+    {
+      "id": "Q10",
+      "feature": "F2",
+      "persona": "소상공인",
+      "question": "성산 2025년 방문객 알려줘",
+      "expectedTools": ["resolve_spot", "get_trend"],
+      "expectedAnswer": "'성산'을 성산일출봉으로 확인한다. 2025년 자료는 아직 없고 2024-12까지 있다고 밝힌 뒤 가장 최근 값인 2024년 906,188명을 안내한다. 2025년 수치를 추정하지 않는다.",
+      "mustMention": ["성산일출봉", "2024-12", "906,188"],
+      "limits": ["관광지별 월별 자료는 2024-12까지다"],
+      "trap": "자료 밖의 2025년 값을 지어내면 오답이다. 2025년분이 DB에 들어오면 이 문제의 기대 답을 고친다",
+      "checks": [
+        {
+          "label": "성산일출봉 자료 끝",
+          "sql": "SELECT strftime(lastMonth, '%Y-%m') FROM dim_spot WHERE spotName = '성산일출봉'",
+          "expected": "2024-12"
+        },
+        {
+          "label": "성산일출봉 2024",
+          "sql": "SELECT sum(visitorCnt)::BIGINT FROM spot_visitors_view WHERE spotName = '성산일출봉' AND year = 2024",
+          "expected": 906188
+        },
+        {
+          "label": "'성산'이 들어간 관광지는 하나",
+          "sql": "SELECT count(*) FROM dim_spot WHERE spotName LIKE '%성산%'",
+          "expected": 1
+        }
+      ]
+    }
+  ]
+}

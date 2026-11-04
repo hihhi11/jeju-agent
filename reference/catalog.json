@@ -309,36 +309,36 @@
     {
       "id": "tour_local",
       "title": "관광공사 기초지자체 방문자수",
-      "status": "수집 중",
+      "status": "사용",
       "group": "외부 보조",
       "provider": "한국관광공사 (공공데이터포털)",
       "form": "API",
       "license": "미확인",
-      "table": null,
-      "dateColumn": null,
+      "table": "tour_local_daily",
+      "dateColumn": "baseDate",
       "grain": "일·기초지자체·방문자구분",
-      "features": "제주시·서귀포시 비교(수집 후)",
-      "description": "수집이 호출 한도로 중단되어 아직 DB에 없다.",
-      "questions": "",
-      "limits": "수집이 끝나면 적재한다. 지금은 답할 수 없다.",
-      "keywords": "방문자, 제주시, 서귀포시"
+      "features": "제주시·서귀포시 비교",
+      "description": "제주시와 서귀포시의 일별 방문자 수. 현지인, 외지인, 외국인으로 나뉜다.",
+      "questions": "지난달 제주시와 서귀포시 중 외지인 방문자가 더 많은 곳은?",
+      "limits": "두 시를 더해 제주 전체로 쓰지 않는다. 합계가 tour_metro_daily 보다 현지인 약 1.08배, 외지인 약 1.7배, 외국인 약 1.15배 크다. 양쪽을 다 간 사람이 두 번 세어지는 것으로 보이나 확인되지 않았다. 제주 전체는 tour_metro_daily 를 쓴다. 외국인은 2019-01부터 있다. 추정치라 소수가 있다.",
+      "keywords": "방문자, 제주시, 서귀포시, 현지인, 외지인, 외국인"
     },
     {
       "id": "bus_daily",
       "title": "일일 정류소별 버스 이용자",
-      "status": "수집 중",
+      "status": "사용",
       "group": "필수(허브)",
       "provider": "제주데이터허브",
       "form": "API",
       "license": "미확인",
-      "table": null,
-      "dateColumn": null,
-      "grain": "일·정류소·승하차구분·요금유형",
-      "features": "최신 정류소 분석(수집 후)",
-      "description": "2026-10 수집이 호출 한도로 중단되어 아직 DB에 없다. 지금 있는 2024-01-01~07 표본 CSV도 곧 덮어써지므로 넣지 않았다.",
-      "questions": "",
-      "limits": "수집이 끝나면 적재한다. 지금은 답할 수 없다.",
-      "keywords": "버스, 정류소, 승차, 최신"
+      "table": "bus_station_daily",
+      "dateColumn": "baseDate",
+      "grain": "일·정류소 ID·승차/환승·요금유형",
+      "features": "최신 정류소 분석",
+      "description": "2026-10 한 달의 정류소별 승차·환승 인원. 원본에 이름이 비어 있는 날은 같은 정류소 ID의 다른 날 이름으로 채웠다.",
+      "questions": "2026년 10월에 승차 인원이 가장 많은 정류소는?",
+      "limits": "2026-10 한 달만 있어 추세나 전년 비교에 쓰지 않는다. isPartialDay 가 참인 날은 원본 일부 누락으로 보여 합계·순위에서 뺀다. 다른 버스 자료와 인원 정의가 달라 더하거나 비교하지 않는다 (2024-01 초 평일 승차 합계가 bus_boarding_daily 의 약 6배). stationId 는 bus_stops 와 형식이 달라 연결되지 않는다. 결제 구분은 값이 모두 카드라 넣지 않았다.",
+      "keywords": "버스, 정류소, 승차, 환승, 최신"
     },
     {
       "id": "hub_full_list",
@@ -516,6 +516,12 @@
       "visitorClass": "현지인, 외지인, 외국인",
       "visitors": "방문자 수 (명). 일자별 순방문자이고 추정치라 소수가 있음"
     },
+    "tour_local_daily": {
+      "baseDate": "날짜",
+      "sigungu": "제주시 또는 서귀포시",
+      "visitorClass": "현지인, 외지인, 외국인",
+      "visitors": "방문자 수 (명). 추정치라 소수가 있음. 두 시를 더해 제주 전체로 쓰지 않음"
+    },
     "visitjeju": {
       "contentsId": "비짓제주 콘텐츠 ID",
       "title": "이름",
@@ -594,6 +600,17 @@
       "nameKey": "표기를 통일한 정류소 이름 키. bus_stop_name_map 과 연결",
       "userCnt": "이용 인원. 정의 미확인, 승하차 구분 없음",
       "isAbnormalDay": "bus_boarding_daily 의 표시. 그 표에 없는 날은 NULL"
+    },
+    "bus_station_daily": {
+      "baseDate": "날짜",
+      "stationId": "정류소 ID (앞자리 0 포함 문자열). bus_stops 의 ID와 형식이 달라 연결되지 않음",
+      "stationName": "정류소 이름. 찾지 못하면 NULL",
+      "isNameFilled": "원본 이름이 비어 같은 ID의 다른 날 이름으로 채웠는지",
+      "nameKey": "표기를 통일한 정류소 이름 키. bus_stop_name_map 과 연결",
+      "moveType": "승차 또는 환승",
+      "priceType": "요금 유형 (일반, 청소년, 어린이, 기타)",
+      "userCnt": "이용 인원. 다른 버스 자료와 정의가 다름",
+      "isPartialDay": "그날 합계가 평일·휴일별 중앙값의 0.7배 미만이라 원본 일부 누락으로 보이는지"
     },
     "bus_stop_name_map": {
       "stationName": "버스 이용 자료의 원본 정류소 이름",

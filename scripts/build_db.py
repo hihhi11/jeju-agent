@@ -2,7 +2,7 @@
 
     python scripts/build_db.py
 
-버스 원본은 행이 많아 집계해서 넣는다. 끝나지 않은 수집(bus_daily, tour_local)은 넣지 않는다.
+버스 원본은 행이 많아 집계해서 넣는다. bus_daily 는 2026-10 전체, tour_local 은 CSV가 있어야 만들어진다.
 결과가 원본과 맞지 않으면 예외를 내고 기존 DB를 건드리지 않는다.
 """
 
@@ -27,9 +27,14 @@ CENTER_SPEC = PROJECT_ROOT / "데이터_센터_명세_v12_데이터명세서_kr.
 # 노선 수가 앞뒤 14일 중앙값의 이 범위를 벗어나면 원본 일부 누락·중복으로 본다
 ROUTE_RATIO_LOW = 0.7
 ROUTE_RATIO_HIGH = 1.5
+# bus_daily.csv 는 마지막에 받은 기간으로 덮어써지므로 이 기간이 모두 있는지 확인한다
+BUS_STATION_RANGE = ("2026-10-01", "2026-10-31")
+# 이용 인원이 그 기간 평일·휴일별 중앙값의 이 비율 미만이면 원본 일부 누락으로 본다
+BUS_STATION_RATIO_LOW = 0.7
 # 같은 이름의 정류소가 이 값(도, 약 3km) 이상 떨어져 있으면 위치를 정하지 않는다
 STOP_SPREAD_DEGREE = 0.03
 NAME_PUNCTUATION = r"[\s\-\.·,()\[\]]"
+NAME_KEY_SQL = f"upper(regexp_replace({{0}}, '{NAME_PUNCTUATION}', '', 'g'))"
 
 
 def _path(env_name: str, default: str) -> Path:
@@ -177,6 +182,51 @@ def _load_calendar_and_weather(con: duckdb.DuckDBPyConnection, src) -> None:
     """)
 
 
+def _load_tour_local(con: duckdb.DuckDBPyConnection, src) -> None:
+    con.execute(f"""
+        CREATE TABLE tour_local_daily AS
+        SELECT baseYmd AS baseDate, signguNm AS sigungu,
+               regexp_replace(touDivNm, '\\(.*\\)', '') AS visitorClass, touNum AS visitors
+        FROM {src('tour_local')}
+        ORDER BY baseDate, sigungu, visitorClass
+    """)
+
+
+def _load_bus_station(con: duckdb.DuckDBPyConnection, src) -> None:
+    # stationId 는 앞자리 0이 있는 문자열이다. bus_stops 의 ID와 형식이 달라 연결되지 않는다
+    raw = f"read_csv('{src.path('bus_daily')}', types = {{'stationId': 'VARCHAR'}})"
+    days, first, last = con.execute(f"SELECT count(DISTINCT baseDate), min(baseDate), max(baseDate) FROM {raw}").fetchone()
+    start, end = (datetime.strptime(d, "%Y-%m-%d").date() for d in BUS_STATION_RANGE)
+    if (first, last, days) != (start, end, (end - start).days + 1):
+        raise ValueError(
+            f"bus_daily.csv 가 {start}~{end} 전체가 아닙니다: {first}~{last}, {days}일. fetch_api.py 로 끝까지 받아 주세요"
+        )
+    # 이름이 전부 빈 날이 있어 같은 ID가 다른 날 가장 많이 쓴 이름으로 채운다
+    con.execute(f"""
+        CREATE TABLE bus_station_daily AS
+        WITH src AS (
+            SELECT baseDate, stationId, NULLIF(trim(stationName), '') AS stationName, moveType, priceType, userCount
+            FROM {raw}
+        ), names AS (
+            SELECT stationId, stationName FROM src WHERE stationName IS NOT NULL
+            GROUP BY stationId, stationName
+            QUALIFY row_number() OVER (PARTITION BY stationId ORDER BY sum(userCount) DESC, stationName) = 1
+        ), days AS (
+            SELECT s.baseDate, sum(s.userCount) AS total, any_value(d.isOffDay) AS isOffDay
+            FROM src s JOIN dim_date d USING (baseDate) GROUP BY s.baseDate
+        ), flags AS (
+            SELECT baseDate, total < {BUS_STATION_RATIO_LOW} * median(total) OVER (PARTITION BY isOffDay) AS isPartialDay
+            FROM days
+        )
+        SELECT s.baseDate, s.stationId, COALESCE(s.stationName, n.stationName) AS stationName,
+               s.stationName IS NULL AND n.stationName IS NOT NULL AS isNameFilled,
+               {NAME_KEY_SQL.format('COALESCE(s.stationName, n.stationName)')} AS nameKey,
+               s.moveType, s.priceType, s.userCount AS userCnt, f.isPartialDay
+        FROM src s LEFT JOIN names n USING (stationId) JOIN flags f USING (baseDate)
+        ORDER BY s.baseDate, s.stationId, s.moveType, s.priceType
+    """)
+
+
 def _load_bus(con: duckdb.DuckDBPyConnection, src) -> None:
     route = src("bus_route_daily")
     con.execute(f"""
@@ -238,7 +288,7 @@ def _load_bus(con: duckdb.DuckDBPyConnection, src) -> None:
 
 
 def _load_bus_stop_names(con: duckdb.DuckDBPyConnection, src) -> None:
-    strict = f"upper(regexp_replace({{0}}, '{NAME_PUNCTUATION}', '', 'g'))"
+    strict = NAME_KEY_SQL
     # 이름 뒤의 (종점), (600번) 같은 괄호 설명을 뺀 키. 위 키로 찾지 못한 이름만 쓴다
     loose = strict.format(r"regexp_replace({0}, '\([^)]*\)', '', 'g')")
     con.execute(f"""
@@ -509,6 +559,14 @@ def _check(con: duckdb.DuckDBPyConnection, src) -> None:
     same("시간대별 합계", "SELECT sum(userCount) FROM bus_hourly", f"SELECT sum(userCount) FROM {src('bus_hourly')}")
     same("기상 행 수", "SELECT count(*) FROM weather_daily", f"SELECT count(*) FROM {src('asos_daily')}")
     same("관광지 수", "SELECT count(*) FROM dim_spot", "SELECT count(DISTINCT spotName) FROM spot_visitors_monthly")
+    same("기초지자체 방문자 행 수", "SELECT count(*) FROM tour_local_daily", f"SELECT count(*) FROM {src('tour_local')}")
+    same(
+        "기초지자체 방문자 합계",
+        "SELECT round(sum(visitors), 1) FROM tour_local_daily",
+        f"SELECT round(sum(touNum), 1) FROM {src('tour_local')}",
+    )
+    same("정류소별 이용자 합계", "SELECT sum(userCnt) FROM bus_station_daily", f"SELECT sum(userCount) FROM {src('bus_daily')}")
+    same("정류소별 이용자 행 수", "SELECT count(*) FROM bus_station_daily", f"SELECT count(*) FROM {src('bus_daily')}")
 
     uneven = one("""
         SELECT count(*) FROM (
@@ -550,6 +608,14 @@ def _check(con: duckdb.DuckDBPyConnection, src) -> None:
         FROM bus_stop_name_map
     """).fetchone()
     print(f"  정류소 이름 위치 연결: {matched}/{names}개, 이용 인원 기준 {share:.1%}")
+    partial, filled_days, filled_share, unnamed = con.execute("""
+        SELECT count(DISTINCT baseDate) FILTER (WHERE isPartialDay),
+               count(DISTINCT baseDate) FILTER (WHERE isNameFilled),
+               sum(userCnt) FILTER (WHERE isNameFilled) / sum(userCnt) FILTER (WHERE isNameFilled OR stationName IS NULL),
+               count(DISTINCT stationId) FILTER (WHERE stationName IS NULL)
+        FROM bus_station_daily
+    """).fetchone()
+    print(f"  bus_daily 일부 누락 추정 {partial}일, 이름 채운 날 {filled_days}일 (이용 인원 기준 {filled_share:.2%}), 이름 없는 ID {unnamed}개")
 
 
 class _Sources:
@@ -583,6 +649,8 @@ def main() -> int:
             ("외국인 입도객", lambda: _load_foreign_arrivals(con, src)),
             ("관광지 표기·시군", lambda: _load_spots(con)),
             ("날짜·기상", lambda: _load_calendar_and_weather(con, src)),
+            ("기초지자체 방문자", lambda: _load_tour_local(con, src)),
+            ("정류소별 이용자 (2026-10)", lambda: _load_bus_station(con, src)),
             ("버스 집계, 정류소 이름 통일", lambda: _load_bus(con, src)),
             ("센터 명세", lambda: _load_center_spec(con)),
             ("허브 목록", lambda: _load_hub_list(con)),

@@ -33,7 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
 TIMEOUT = 30
-RETRIES = 4
+RETRIES = 8  # 허브가 ESOCKETTIMEDOUT 으로 간헐적 HTTP 500을 내 4회로는 부족했다
 DELAY = 0.1  # 문서상 최대 30 tps. 여유를 두고 호출한다
 
 HUB = "https://open.jejudatahub.net/api/proxy"
