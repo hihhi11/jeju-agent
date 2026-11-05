@@ -2,7 +2,7 @@
 
     python scripts/build_db.py
 
-버스 원본은 행이 많아 집계해서 넣는다. bus_daily 는 2026-10 전체, tour_local 은 CSV가 있어야 만들어진다.
+버스 원본은 행이 많아 집계해서 넣는다. bus_daily 는 2026-10까지 온전한 달로, tour_local 은 CSV가 있어야 만들어진다.
 결과가 원본과 맞지 않으면 예외를 내고 기존 DB를 건드리지 않는다.
 """
 
@@ -27,9 +27,9 @@ CENTER_SPEC = PROJECT_ROOT / "데이터_센터_명세_v12_데이터명세서_kr.
 # 노선 수가 앞뒤 14일 중앙값의 이 범위를 벗어나면 원본 일부 누락·중복으로 본다
 ROUTE_RATIO_LOW = 0.7
 ROUTE_RATIO_HIGH = 1.5
-# bus_daily.csv 는 마지막에 받은 기간으로 덮어써지므로 이 기간이 모두 있는지 확인한다
-BUS_STATION_RANGE = ("2026-10-01", "2026-10-31")
-# 이용 인원이 그 기간 평일·휴일별 중앙값의 이 비율 미만이면 원본 일부 누락으로 본다
+# bus_daily.csv 는 마지막에 받은 기간으로 덮어써지므로 어느 달 1일부터 이 날까지 빠짐없는지 확인한다
+BUS_STATION_END = "2026-10-31"
+# 이용 인원이 그 달 평일·휴일별 중앙값의 이 비율 미만이면 원본 일부 누락으로 본다
 BUS_STATION_RATIO_LOW = 0.7
 # 같은 이름의 정류소가 이 값(도, 약 3km) 이상 떨어져 있으면 위치를 정하지 않는다
 STOP_SPREAD_DEGREE = 0.03
@@ -196,10 +196,10 @@ def _load_bus_station(con: duckdb.DuckDBPyConnection, src) -> None:
     # stationId 는 앞자리 0이 있는 문자열이다. bus_stops 의 ID와 형식이 달라 연결되지 않는다
     raw = f"read_csv('{src.path('bus_daily')}', types = {{'stationId': 'VARCHAR'}})"
     days, first, last = con.execute(f"SELECT count(DISTINCT baseDate), min(baseDate), max(baseDate) FROM {raw}").fetchone()
-    start, end = (datetime.strptime(d, "%Y-%m-%d").date() for d in BUS_STATION_RANGE)
-    if (first, last, days) != (start, end, (end - start).days + 1):
+    end = datetime.strptime(BUS_STATION_END, "%Y-%m-%d").date()
+    if last != end or first.day != 1 or days != (end - first).days + 1:
         raise ValueError(
-            f"bus_daily.csv 가 {start}~{end} 전체가 아닙니다: {first}~{last}, {days}일. fetch_api.py 로 끝까지 받아 주세요"
+            f"bus_daily.csv 가 어느 달 1일부터 {end} 까지 빠짐없이 있지 않습니다: {first}~{last}, {days}일. fetch_api.py 로 끝까지 받아 주세요"
         )
     # 이름이 전부 빈 날이 있어 같은 ID가 다른 날 가장 많이 쓴 이름으로 채운다
     con.execute(f"""
@@ -215,7 +215,8 @@ def _load_bus_station(con: duckdb.DuckDBPyConnection, src) -> None:
             SELECT s.baseDate, sum(s.userCount) AS total, any_value(d.isOffDay) AS isOffDay
             FROM src s JOIN dim_date d USING (baseDate) GROUP BY s.baseDate
         ), flags AS (
-            SELECT baseDate, total < {BUS_STATION_RATIO_LOW} * median(total) OVER (PARTITION BY isOffDay) AS isPartialDay
+            SELECT baseDate,
+                   total < {BUS_STATION_RATIO_LOW} * median(total) OVER (PARTITION BY date_trunc('month', baseDate), isOffDay) AS isPartialDay
             FROM days
         )
         SELECT s.baseDate, s.stationId, COALESCE(s.stationName, n.stationName) AS stationName,
@@ -650,7 +651,7 @@ def main() -> int:
             ("관광지 표기·시군", lambda: _load_spots(con)),
             ("날짜·기상", lambda: _load_calendar_and_weather(con, src)),
             ("기초지자체 방문자", lambda: _load_tour_local(con, src)),
-            ("정류소별 이용자 (2026-10)", lambda: _load_bus_station(con, src)),
+            ("정류소별 이용자", lambda: _load_bus_station(con, src)),
             ("버스 집계, 정류소 이름 통일", lambda: _load_bus(con, src)),
             ("센터 명세", lambda: _load_center_spec(con)),
             ("허브 목록", lambda: _load_hub_list(con)),

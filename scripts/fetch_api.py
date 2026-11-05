@@ -356,6 +356,12 @@ def _fetch_chunk(s: Source, params: dict) -> list[dict]:
     return rows
 
 
+def _save_raw(path: Path, rows: list[dict]) -> None:
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    temp.replace(path)
+
+
 def _resolve_range(s: Source, start: str | None, end: str | None) -> tuple[date, date] | None:
     if s.unit == "none":
         return None
@@ -433,9 +439,7 @@ def collect(name: str, start: str | None, end: str | None, force: bool) -> Path:
                 continue
             params = {**(s.params(a, b) if a else {}), **variant}
             got = _fetch_chunk(s, params)
-            temp = path.with_suffix(".tmp")
-            temp.write_text(json.dumps(got, ensure_ascii=False), encoding="utf-8")
-            temp.replace(path)
+            _save_raw(path, got)
             rows.extend(got)
             print(f"  [{done}/{total}] {path.stem}: {len(got)}행")
             time.sleep(DELAY)

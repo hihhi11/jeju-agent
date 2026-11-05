@@ -240,6 +240,159 @@
           "expected": 1
         }
       ]
+    },
+    {
+      "id": "Q11",
+      "feature": "F2",
+      "persona": "소상공인",
+      "question": "2025년에 제주시랑 서귀포시 중 외지인 방문자가 더 많은 곳은?",
+      "expectedTools": ["rank_values"],
+      "expectedAnswer": "제주시 60,111,114명, 서귀포시 44,107,350명으로 제주시가 더 많다. 일자별 방문자를 1년 더한 값이라 실제 사람 수가 아니다.",
+      "mustMention": ["제주시", "60,111,114", "44,107,350"],
+      "limits": ["통신 자료로 만든 추정치다", "일자별 순방문자의 합이라 2박 3일이면 3명으로 세어진다"],
+      "trap": "합계를 2025년에 온 실제 사람 수처럼 말하면 틀린다",
+      "checks": [
+        {
+          "label": "2025 시별 외지인",
+          "sql": "SELECT string_agg(sigungu || ':' || v, ', ' ORDER BY v DESC) FROM (SELECT sigungu, round(sum(visitors))::BIGINT AS v FROM tour_local_daily WHERE year(baseDate) = 2025 AND visitorClass = '외지인' GROUP BY 1)",
+          "expected": "제주시:60111114, 서귀포시:44107350"
+        },
+        {
+          "label": "2025년 365일이 모두 있음",
+          "sql": "SELECT count(DISTINCT baseDate) FROM tour_local_daily WHERE year(baseDate) = 2025",
+          "expected": 365
+        }
+      ]
+    },
+    {
+      "id": "Q12",
+      "feature": "F2",
+      "persona": "관광 담당 공무원",
+      "question": "2025년 제주 전체 외지인 방문자는 제주시랑 서귀포시를 더하면 되지?",
+      "expectedTools": ["get_trend"],
+      "expectedAnswer": "더하면 안 된다. 두 시 합계 104,218,464명은 제주 전체 값 59,269,886명의 1.76배다. 제주 전체는 광역 자료의 59,269,886명을 쓴다.",
+      "mustMention": ["59,269,886", "1.76"],
+      "limits": ["두 시를 모두 간 사람이 두 번 세어지는 것으로 보이나 확인되지 않았다"],
+      "trap": "사용자 말대로 더해 104,218,464명이라고 답하면 오답이다",
+      "checks": [
+        {
+          "label": "2025 제주 전체 외지인",
+          "sql": "SELECT round(sum(visitors))::BIGINT FROM tour_metro_daily WHERE year(baseDate) = 2025 AND visitorClass = '외지인'",
+          "expected": 59269886
+        },
+        {
+          "label": "두 시 합계의 제주 전체 대비 배율",
+          "sql": "SELECT round((SELECT sum(visitors) FROM tour_local_daily WHERE year(baseDate) = 2025 AND visitorClass = '외지인') / (SELECT sum(visitors) FROM tour_metro_daily WHERE year(baseDate) = 2025 AND visitorClass = '외지인'), 2)",
+          "expected": 1.76
+        }
+      ]
+    },
+    {
+      "id": "Q13",
+      "feature": "F2",
+      "persona": "도민·연구자",
+      "question": "2018년 제주시 외국인 방문자는 몇 명이야?",
+      "expectedTools": ["get_trend"],
+      "expectedAnswer": "2018년 외국인 값은 없고 2019-01부터 있다고 밝힌 뒤 가장 가까운 2019년 값 4,683,754명을 안내한다. 0명이라고 하거나 값을 추정하지 않는다.",
+      "mustMention": ["2019-01", "4,683,754"],
+      "limits": ["외국인 값은 2019-01부터다"],
+      "trap": "자료가 없는 것을 0명으로 답하면 오답이다. 현지인·외지인은 2018년에도 있어 자료 전체가 없는 것은 아니다",
+      "checks": [
+        {
+          "label": "2018 외국인 행 수",
+          "sql": "SELECT count(*) FROM tour_local_daily WHERE year(baseDate) = 2018 AND visitorClass = '외국인'",
+          "expected": 0
+        },
+        {
+          "label": "외국인 자료 시작",
+          "sql": "SELECT strftime(min(baseDate), '%Y-%m') FROM tour_local_daily WHERE visitorClass = '외국인'",
+          "expected": "2019-01"
+        },
+        {
+          "label": "2019 제주시 외국인",
+          "sql": "SELECT round(sum(visitors))::BIGINT FROM tour_local_daily WHERE year(baseDate) = 2019 AND visitorClass = '외국인' AND sigungu = '제주시'",
+          "expected": 4683754
+        }
+      ]
+    },
+    {
+      "id": "Q14",
+      "feature": "F2",
+      "persona": "도민·연구자",
+      "question": "2026년 10월에 버스 승차가 가장 많았던 정류소는?",
+      "expectedTools": ["rank_values"],
+      "expectedAnswer": "일부 누락으로 보이는 5일을 뺀 26일 기준으로, 이름이 같은 정류소를 묶으면 제주버스터미널(가상정류소) 42,061명, 한라병원 41,863명, 제주대학교 39,294명 순이다. 방향별 ID로 나누면 제주시청(광양방면) 32,430명이 1위라 순위 기준을 함께 말한다.",
+      "mustMention": ["26일", "제주버스터미널", "42,061", "한라병원"],
+      "limits": ["10-01, 10-12, 10-23~25는 뺐다", "다른 버스 자료와 인원 정의가 달라 비교하지 않는다"],
+      "trap": "누락 추정일을 넣으면 43,778명이 된다. 묶는 기준을 말하지 않고 1위를 단정해도 틀린다",
+      "checks": [
+        {
+          "label": "이름 기준 상위 3곳",
+          "sql": "SELECT string_agg(nameKey || ':' || v, ', ' ORDER BY v DESC) FROM (SELECT nameKey, sum(userCnt)::BIGINT AS v FROM bus_station_daily WHERE baseDate BETWEEN '2026-10-01' AND '2026-10-31' AND NOT isPartialDay AND moveType = '승차' GROUP BY 1 ORDER BY 2 DESC LIMIT 3)",
+          "expected": "제주버스터미널가상정류소:42061, 한라병원:41863, 제주대학교:39294"
+        },
+        {
+          "label": "ID 기준 1위",
+          "sql": "SELECT stationName || ':' || v FROM (SELECT stationId, any_value(stationName) AS stationName, sum(userCnt)::BIGINT AS v FROM bus_station_daily WHERE baseDate BETWEEN '2026-10-01' AND '2026-10-31' AND NOT isPartialDay AND moveType = '승차' GROUP BY 1 ORDER BY 3 DESC LIMIT 1)",
+          "expected": "제주시청(광양방면):32430"
+        },
+        {
+          "label": "제외 후 일수",
+          "sql": "SELECT count(DISTINCT baseDate) FROM bus_station_daily WHERE baseDate BETWEEN '2026-10-01' AND '2026-10-31' AND NOT isPartialDay",
+          "expected": 26
+        }
+      ]
+    },
+    {
+      "id": "Q15",
+      "feature": "F5",
+      "persona": "도민·연구자",
+      "question": "2026년 10월 24일에 비가 많이 왔는데 버스 이용객이 얼마나 줄었어?",
+      "expectedTools": ["analyze_weather_effect"],
+      "expectedAnswer": "그날 비는 많이 왔지만 버스 자료가 일부 누락으로 보여 감소폭을 말할 수 없다. 비 영향 분석 자료는 2025-10-19까지다. 대신 장기 자료로는 강수 30mm 이상인 날 승차가 10.8% 줄었다고 안내한다.",
+      "mustMention": ["누락", "2025-10-19", "10.8%"],
+      "limits": ["누락 추정은 제공처에 확인한 것이 아니다", "함께 나타나는 관계이며 비가 원인이라고 단정하지 않는다"],
+      "trap": "5,315명을 평소와 비교해 '호우로 93% 줄었다'고 답하면 오답이다",
+      "checks": [
+        {
+          "label": "10-24 합계와 누락 추정 표시",
+          "sql": "SELECT sum(userCnt)::BIGINT || ':' || any_value(isPartialDay) FROM bus_station_daily WHERE baseDate = '2026-10-24'",
+          "expected": "5315:true"
+        },
+        {
+          "label": "2026-10 누락 추정일",
+          "sql": "SELECT string_agg(strftime(baseDate, '%m-%d'), ',' ORDER BY baseDate) FROM (SELECT DISTINCT baseDate FROM bus_station_daily WHERE isPartialDay AND baseDate BETWEEN '2026-10-01' AND '2026-10-31')",
+          "expected": "10-01,10-12,10-23,10-24,10-25"
+        },
+        {
+          "label": "비 영향 자료 끝",
+          "sql": "SELECT strftime(max(baseDate), '%Y-%m-%d') FROM bus_weather_daily",
+          "expected": "2025-10-19"
+        }
+      ]
+    },
+    {
+      "id": "Q16",
+      "feature": "F3",
+      "persona": "관광 담당 공무원",
+      "question": "2026년 10월 정류소 버스 이용자가 작년 10월보다 늘었어?",
+      "expectedTools": ["compare_periods"],
+      "expectedAnswer": "비교할 수 없다. 정류소별 최신 자료에는 2025년 값이 없고, 2025-10까지 있는 다른 버스 자료는 인원 정의가 달라 이어 붙이면 안 된다고 답한다.",
+      "mustMention": ["2025", "정의"],
+      "limits": ["두 자료의 인원 정의 차이의 원인은 확인되지 않았다"],
+      "trap": "bus_boarding_daily 의 2025-10과 비교하면 약 6배 늘어난 것처럼 나와 오답이다. 2025년분을 받으면 이 문제의 기대 답을 고친다",
+      "checks": [
+        {
+          "label": "정류소별 자료의 2025년 행 수",
+          "sql": "SELECT count(*) FROM bus_station_daily WHERE year(baseDate) = 2025",
+          "expected": 0
+        },
+        {
+          "label": "다른 버스 자료의 끝",
+          "sql": "SELECT strftime(max(baseDate), '%Y-%m-%d') FROM bus_boarding_daily",
+          "expected": "2025-10-19"
+        }
+      ]
     }
   ]
 }
