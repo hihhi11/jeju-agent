@@ -1,9 +1,9 @@
 """bus_daily 를 2026-09부터 과거로 하루씩 받고, 한 달이 다 차면 DB에 넣는 스크립트.
 
-    python scripts/backfill_bus.py           # 작업 스케줄러가 매일 실행한다 (register_backfill_task.ps1)
     python scripts/backfill_bus.py --status  # 진행 상황 확인
+    python scripts/backfill_bus.py           # 받을 수 있는 만큼 받기
 
-한도에 걸리면 한 시간마다, 서버 오류면 10분마다 다시 시도하고 그날 23:30에 끝낸다.
+받기로 한 날 손으로 실행한다. 한도에 걸리면 끝내고, 서버 오류면 10분마다 다시 시도하며 그날 23:30에 끝낸다.
 DB는 새 파일로 만들어 원본·시험 문제 대조를 통과해야 바꾼다. 실패하면 CSV와 DB를 그대로 둔다.
 기록은 data/backfill_bus.log 에 남는다.
 """
@@ -28,11 +28,8 @@ from fetch_api import ApiError, PROJECT_ROOT, SOURCES, _fetch_chunk, _path, _sav
 LATEST = date(2026, 9, 30)
 OLDEST = date(2026, 1, 1)
 DB_END = "20261031"  # build_db.py 의 BUS_STATION_END 와 같은 날
-UNTIL = date(2026, 11, 11)  # 11-12부터 검증과 기능 동결이라 그 전날까지만 받는다
 STOP_HOUR, STOP_MINUTE = 23, 30
-QUOTA_WAIT = 3600
 ERROR_WAIT = 600
-NO_WINDOW = subprocess.CREATE_NO_WINDOW
 
 
 class DataMismatch(Exception):
@@ -90,16 +87,13 @@ def _fetch_day(day: date) -> list[dict]:
 
 
 def _run(script: str, env: dict) -> bool:
-    # pythonw 에서는 자식의 표준 출력이 없을 수 있어 python.exe 를 창 없이 실행한다
-    python = Path(sys.executable).with_name("python.exe")
     done = subprocess.run(
-        [str(python), str(PROJECT_ROOT / "scripts" / script)],
+        [sys.executable, str(PROJECT_ROOT / "scripts" / script)],
         env=env,
         cwd=PROJECT_ROOT,
         capture_output=True,
         encoding="utf-8",
         errors="replace",
-        creationflags=NO_WINDOW,
     )
     print(done.stdout + done.stderr, end="", flush=True)
     return done.returncode == 0
@@ -153,7 +147,6 @@ def _wait(seconds: int, deadline: datetime) -> None:
 
 
 def collect_days(deadline: datetime) -> None:
-    quota_blocked = False
     for day in _missing_days():
         while True:
             if datetime.now() >= deadline:
@@ -164,11 +157,10 @@ def collect_days(deadline: datetime) -> None:
                 break
             except ApiError as e:
                 _log(f"{day} 실패: {e}")
-                quota_blocked = quota_blocked or "quota" in str(e).lower()
-                _wait(QUOTA_WAIT if "quota" in str(e).lower() else ERROR_WAIT, deadline)
-        if quota_blocked:
-            _log("호출 한도가 풀린 것을 확인했습니다")
-            quota_blocked = False
+                if "quota" in str(e).lower():
+                    _log("호출 한도에 걸려 끝냅니다. 받던 날은 저장되지 않아 다음에 다시 받습니다")
+                    return
+                _wait(ERROR_WAIT, deadline)
         _save_raw(_raw_file(day), rows)
         _log(f"{day} 저장: {len(rows)}행")
         if day.day == 1:
@@ -193,13 +185,12 @@ def show_status() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="bus_daily 과거 방향 수집")
     parser.add_argument("--status", action="store_true", help="진행 상황 출력")
-    parser.add_argument("--until", default=_ymd(UNTIL), help="이 날까지만 받기 YYYYMMDD. 지나면 DB 반영만 한다")
     args = parser.parse_args()
+    sys.stdout.reconfigure(errors="replace")
     if args.status:
-        sys.stdout.reconfigure(errors="replace")
         return show_status()
 
-    # 작업 스케줄러는 창 없는 pythonw 로 실행하므로 모든 출력을 파일로 보낸다
+    print(f"기록: {_log_path()} (진행 상황은 --status 로 확인)")
     sys.stdout = sys.stderr = open(_log_path(), "a", encoding="utf-8", buffering=1)
     # 프로세스가 끝나면 운영체제가 푸는 잠금이라 비정상 종료해도 남지 않는다
     lock = open(_log_path().with_suffix(".lock"), "w")
@@ -212,9 +203,6 @@ def main() -> int:
     now = datetime.now()
     _log(f"시작 (남은 날: {len(_missing_days())}일)")
     publish()
-    if now.date() > datetime.strptime(args.until, "%Y%m%d").date():
-        _log(f"수집 기한 {args.until} 이 지나 받지 않습니다")
-        return 0
     try:
         collect_days(_deadline(now))
     except DataMismatch as e:
