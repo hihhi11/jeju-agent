@@ -18,11 +18,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import anthropic
 
-from agent.agent import SYSTEM_PROMPT, Agent
-from agent.common import clean
+import agent.agent as agent_module
+from agent.agent import SYSTEM_PROMPT, Agent, AgentAnswer
+from agent.common import ToolResult, clean
+from agent.display import DIMMED_OPACITY, build_figure, chart_note, clarification_choices, count_columns, csv_bytes, evidence_lines, hub_frame, rows_frame, safe_markdown, visible_results
 from agent.llm import ClaudeConversation, LLMError, OpenAICompatibleConversation, ToolCall, Turn
 from agent.registry import TOOL_DEFINITIONS, execute_tool
-from agent.tools import analyze_weather_effect, compare_periods, describe_data, find_data, get_seasonality, get_trend, rank_values, resolve_spot
+from agent.common import query
+from agent.tools import analyze_weather_effect, compare_periods, describe_data, find_data, get_day_pattern, get_seasonality, get_trend, rank_values, resolve_spot
 from agent.verify import unverified_numbers
 
 _failed = 0
@@ -52,6 +55,27 @@ def check_tools() -> None:
     check("Q02 명세 조회", describe_data("1-01").status, "center_only")
     check("Q02 반출 불가", describe_data("1-01").summary["exportable"], False)
     check("허브 목록은 LLM에 보내지 않음", "hubMatches" in q02.to_llm_json(), False)
+
+    check("자료 찾기: 없는 값을 다른 자료로 답하지 않음", (find_data("렌터카 이용 비율").rows, find_data("렌터카 이용 비율").summary["tokensNotFound"]), ([], ["렌터카"]))
+    check("자료 찾기: 흔한 말만 있으면 전체에서 찾음", len(find_data("관광").rows) > 0, True)
+    check("자료 찾기: 흔한 말은 빼고 찾음", all("입도" not in r["title"] for r in find_data("관광객 버스").rows), True)
+    check("자료 찾기: 일부 낱말이 없으면 알림", "크루즈" in find_data("버스 크루즈").message, True)
+
+    # 기대값은 도구와 별개로 SQL로 계산한다
+    expected = query(
+        "SELECT round(avg(t.visitors) FILTER (WHERE NOT d.isOffDay)) AS workday, round(avg(t.visitors) FILTER (WHERE d.isWeekend)) AS weekend, "
+        "count(*) FILTER (WHERE NOT d.isOffDay) AS workdays, count(*) FILTER (WHERE d.isWeekend) AS weekends "
+        "FROM tour_metro_daily t JOIN dim_date d USING (baseDate) WHERE t.visitorClass = '외지인' AND t.baseDate BETWEEN DATE '2025-10-01' AND DATE '2026-09-30'"
+    ).iloc[0]
+    day = get_day_pattern("visitors_jeju", {"visitorClass": "외지인"}, "2025-10", "2026-09")
+    check("요일: 평일·주말 평균", (day.summary["workdayAverage"], day.summary["weekendAverage"], day.summary["workdayDays"], day.summary["weekendDays"]), (expected["workday"], expected["weekend"], expected["workdays"], expected["weekends"]))
+    check("요일: 기간을 안 주면 온전한 12개월", get_day_pattern("visitors_jeju", {"visitorClass": "외지인"}).evidence["period"], "2025-10~2026-09")
+    check("요일: 요일 7개가 순서대로", [r["dayOfWeek"][0] for r in clean(day.rows)], list("월화수목금토일"))
+    check("요일: 월별 지표는 거부", get_day_pattern("arrivals").status, "not_comparable")
+    check("요일: 두 시를 더하지 않음", get_day_pattern("visitors_city", {"visitorClass": "외지인"}).status, "needs_clarification")
+    check("요일: 없는 기간", get_day_pattern("visitors_jeju", {"visitorClass": "외지인"}, "2010", "2011").status, "out_of_range")
+    check("요일: 날이 부족하면 말하지 않음", get_day_pattern("visitors_jeju", {"visitorClass": "외지인"}, "2025-10", "2025-10").status in ("ok", "insufficient_sample"), True)
+    check("요일: 필수 필터 확인", get_day_pattern("visitors_jeju").status, "needs_clarification")
 
     q03 = rank_values("spot_visitors", "2024", "2024", top_n=5)
     check("Q03 순위", [(r["spot"], r["value"]) for r in rows_of(q03)], [("한라산국립공원", 928409), ("성산일출봉", 906188), ("천지연폭포", 890241), ("중문대포해안주상절리대", 816210), ("카멜리아힐", 774153)])
@@ -273,7 +297,7 @@ def check_claude_request() -> None:
         first, second = _FakeClaude.requests[0], _FakeClaude.requests[1]
         check("Claude: 모델과 대체 설정", (first["body"]["model"], first["body"]["fallbacks"], first["beta"]), ("claude-opus-5-5", "default", "server-side-fallback-2026-07-01"))
         check("Claude: 캐시와 노력 수준", (first["body"]["cache_control"], first["body"]["output_config"]), ({"type": "ephemeral"}, {"effort": "medium"}))
-        check("Claude: 도구 수", len(first["body"]["tools"]), 8)
+        check("Claude: 도구 수", len(first["body"]["tools"]), 9)
         check("Claude: 생각 블록을 그대로 돌려보냄", second["body"]["messages"][1]["content"][0]["signature"], "sig")
         check("Claude: 도구 결과", second["body"]["messages"][2]["content"][0]["tool_use_id"], "toolu_1")
 
@@ -331,6 +355,122 @@ def check_openai_request() -> None:
         server.shutdown()
 
 
+def check_display() -> None:
+    check("화면: 물결표와 달러 표시 유지", safe_markdown("2019~2024, $5"), r"2019\~2024, \$5")
+    check("화면: 줄바꿈 유지", safe_markdown("답\n**근거**"), "답  \n**근거**")
+
+    samples = [
+        get_trend("visit_purpose", {"purpose": "레저"}),
+        get_trend("arrivals", start="2024", end="2024", grain="month"),
+        get_trend("spot_visitors", {"spot": "성산일출봉"}, start="2023", end="2024", group_by="visitorType"),
+        rank_values("spot_visitors", "2024", "2024", top_n=5),
+        rank_values("bus_station", "2026-10", "2026-10", top_n=5),
+        compare_periods("spot_visitors", "2019", "2019", "2024", "2024"),
+        get_seasonality("spot_visitors", {"sigungu": "서귀포시"}),
+        analyze_weather_effect(),
+        get_day_pattern("visitors_jeju", {"visitorClass": "외지인"}),
+    ]
+    for result in samples:
+        figure = build_figure(result)
+        check(f"화면: 차트 생성 {result.chart['title']}", figure is not None, True)
+        unknown = [c for c in rows_frame(result.rows).columns if c.isascii()]
+        check(f"화면: 한글 열 이름 {result.chart['title']}", unknown, [])
+        csv = csv_bytes(rows_frame(result.rows))
+        check(f"화면: CSV 는 BOM 으로 시작 {result.chart['title']}", csv[:3], b"\xef\xbb\xbf")
+
+    check("화면: 쉼표는 값에만", count_columns(rows_frame(samples[3].rows)), ["값"])
+    ranked = build_figure(samples[3])
+    check("화면: 순위는 눕히고 1위가 맨 위", (ranked.data[0].orientation, ranked.layout.yaxis.autorange, ranked.data[0].y[0]), ("h", "reversed", "한라산국립공원"))
+    check("화면: 가장 큰 값만 적음", [t for t in ranked.data[0].text if t], ["928,409명"])
+    trend = build_figure(samples[0])
+    check("화면: 일부 달만 있는 해는 흐리게", (trend.data[0].marker.opacity[0], trend.data[0].marker.opacity[1]), (DIMMED_OPACITY, 1))
+    check("화면: 흐린 막대 설명", "일부 달" in chart_note(samples[0]), True)
+    check("화면: 계절성 x축은 월", build_figure(samples[6]).data[0].x[0], "1월")
+    check("화면: 요일은 세로 막대이고 축 단위는 짧게", (build_figure(samples[8]).data[0].orientation, build_figure(samples[8]).layout.yaxis.ticksuffix), ("v", "명"))
+    check("화면: 계열은 범례로 구분", (len(build_figure(samples[2]).data), build_figure(samples[2]).layout.showlegend), (2, True))
+    check("화면: 값이 하나면 차트 없음", build_figure(rank_values("spot_visitors", "2024", "2024", top_n=1)), None)
+    check("화면: 차트 없는 결과", build_figure(find_data("버스")), None)
+
+    # 근거 표시는 도구 결과를 그대로 옮긴다. 지표 ID 를 사용자에게 보이지 않는다
+    labels = dict(evidence_lines(samples[3]))
+    check("화면: 근거", (labels["지표"], labels["기간"], labels["범위"]), ("관광지 입장객", "2024-01~2024-12", "내국인+외국인 합산"))
+
+    answer = AgentAnswer("", tool_calls=[{"name": "resolve_spot", "arguments": {"name": "폭포"}, "status": "needs_clarification"}], results=[resolve_spot("폭포")])
+    check("화면: 되묻기 후보", clarification_choices(answer), ["정방폭포", "천제연폭포", "천지연폭포"])
+    answer = AgentAnswer("", tool_calls=[{"name": "get_trend", "arguments": {}, "status": "ok"}] * 2 + [{"name": "get_trend", "arguments": {"metric": "없음"}, "status": "invalid_request"}], results=[samples[0], samples[0], get_trend("없음")])
+    check("화면: 다시 부른 결과와 입력 오류는 뺌", len(visible_results(answer)), 1)
+
+    hub_only = ToolResult("ok", display_only={"hubMatches": [{"title": "자료", "category": "분야", "owner": "기관", "periodText": "기간", "updatedDate": "날짜", "viewCount": 1}]})
+    check("화면: 허브 표는 정해진 열만", list(hub_frame(hub_only).columns), ["자료 이름", "분야", "제공 기관", "제공 기간", "갱신일"])
+    check("화면: 허브 항목은 LLM에 안 감", "자료 이름" in hub_only.to_llm_json() or "hubMatches" in hub_only.to_llm_json(), False)
+
+
+def _app_test(turns: list[Turn]):
+    """가짜 LLM으로 실제 화면 코드를 돌린다."""
+    from streamlit.testing.v1 import AppTest
+
+    agent_module.make_conversation = lambda system, tools: ScriptedConversation(turns)
+    return AppTest.from_file(str(PROJECT_ROOT / "app.py"), default_timeout=60).run()
+
+
+def _kinds(app, kind: str) -> int:
+    return len(app.get(kind))
+
+
+def check_app() -> None:
+    original = agent_module.make_conversation
+    try:
+        app = _app_test([_tool("rank_values", metric="spot_visitors", start="2024", end="2024", top_n=5), _done("한라산국립공원이 928,409명으로 1위입니다. 2024-01~2024-12 자료 기준입니다.")])
+        check("앱: 첫 화면 오류 없음", len(app.exception), 0)
+        check("앱: 코드의 값이 화면에 찍히지 않음", [m.value for m in app.markdown if "None" in m.value], [])
+        check("앱: 첫 화면 예시 버튼", sum(b.key.startswith("main_") for b in app.button), 6)
+
+        app.chat_input[0].set_value("2024년에 사람이 가장 많이 간 관광지 5곳").run()
+        check("앱: 답변 뒤 오류 없음", [e.value for e in app.exception], [])
+        check("앱: 차트 표시", _kinds(app, "plotly_chart"), 1)
+        check("앱: CSV 내려받기", _kinds(app, "download_button"), 1)
+        check("앱: 물결표가 취소선이 되지 않음", any(r"2024-01\~2024-12" in m.value for m in app.markdown), True)
+        check("앱: 입력창 다시 켜짐", app.chat_input[0].disabled, False)
+        check("앱: 근거 표시", any("계산 방법" in m.value for m in app.markdown), True)
+
+        app = _app_test([_tool("resolve_spot", name="폭포"), _done("어느 폭포인가요?"), _tool("get_trend", metric="spot_visitors", filters={"spot": "천지연폭포"}, start="2024", end="2024"), _done("890,241명입니다.")])
+        app.button(key="main_0").click().run()
+        check("앱: 예시 버튼으로 질문", [e.value for e in app.exception], [])
+        choice = [b for b in app.button if b.key.startswith("choice_")]
+        check("앱: 되묻기 후보 버튼", [b.label for b in choice], ["정방폭포", "천제연폭포", "천지연폭포"])
+        next(b for b in choice if b.label == "천지연폭포").click().run()
+        check("앱: 후보를 고르면 이어서 답함", any("890,241명입니다." in m.value for m in app.markdown), True)
+        check("앱: 고른 뒤 후보 버튼 사라짐", [b.key for b in app.button if b.key.startswith("choice_")], [])
+
+        app = _app_test([_tool("get_trend", metric="arrivals", start="2024", end="2024"), _done("99,999명입니다."), _done("여전히 99,999명입니다.")])
+        app.chat_input[0].set_value("입도객?").run()
+        check("앱: 확인되지 않은 숫자 경고", any("99999명" in w.value for w in app.warning), True)
+
+        def failing(system, tools):
+            raise LLMError(".env 에 GEMINI_API_KEY 가 없습니다.")
+
+        app = _app_test([])
+        agent_module.make_conversation = failing
+        app.chat_input[0].set_value("입도객?").run()
+        check("앱: 키가 없으면 오류를 안내", ([e.value for e in app.exception], [e.value for e in app.error]), ([], [".env 에 GEMINI_API_KEY 가 없습니다."]))
+
+        # 정해진 응답이 없어 가짜 LLM이 예외를 낸다
+        app = _app_test([])
+        app.chat_input[0].set_value("입도객?").run()
+        check("앱: 예상 못한 오류 뒤 입력창 복구", ([e.value for e in app.exception], len(app.error), app.chat_input[0].disabled), ([], 1, False))
+
+        app = _app_test([])
+        app.sidebar.radio[0].set_value("데이터 목록").run()
+        check("앱: 데이터 목록", ([e.value for e in app.exception], any("분석할 수 있는 자료" in s.value for s in app.subheader)), ([], True))
+        app.text_input[0].set_value("카드").run()
+        check("앱: 데이터 검색의 센터 전용 명세", ([e.value for e in app.exception], any("센터 전용" in s.value for s in app.subheader)), ([], True))
+        if find_data("버스").display_only.get("hubMatches"):
+            app.text_input[0].set_value("버스").run()
+            check("앱: 허브 목록은 표만 있고 내려받기 없음", (any("허브 목록" in s.value for s in app.subheader), _kinds(app, "download_button")), (True, 0))
+    finally:
+        agent_module.make_conversation = original
+
+
 def main() -> int:
     sys.stdout.reconfigure(errors="replace")
     check_tools()
@@ -339,6 +479,8 @@ def main() -> int:
     check_loop()
     check_claude_request()
     check_openai_request()
+    check_display()
+    check_app()
     print(f"확인 {_passed + _failed}건, 다름 {_failed}건")
     return 1 if _failed else 0
 

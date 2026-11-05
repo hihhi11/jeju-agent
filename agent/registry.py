@@ -118,6 +118,17 @@ TOOL_DEFINITIONS = [
         ["metric"],
     ),
     _tool(
+        "get_day_pattern",
+        "요일별 하루 평균과 평일·주말 차이. 일별 자료인 visitors_jeju, visitors_city, bus_station 만 된다. 기간을 안 주면 가장 최근의 온전한 12개월을 쓴다.",
+        {
+            "metric": _METRIC,
+            "filters": _FILTERS,
+            "start": _MONTH,
+            "end": _MONTH,
+        },
+        ["metric"],
+    ),
+    _tool(
         "analyze_weather_effect",
         "강수량이나 기온에 따른 버스 승차 변화를 평소와 비교한다. 특정 날짜를 물으면 date 를 넣는다. 버스와 날씨의 관계는 이 도구로만 답한다.",
         {
@@ -138,6 +149,7 @@ _FUNCTIONS = {
     "rank_values": tools.rank_values,
     "compare_periods": tools.compare_periods,
     "get_seasonality": tools.get_seasonality,
+    "get_day_pattern": tools.get_day_pattern,
     "analyze_weather_effect": tools.analyze_weather_effect,
 }
 _VALIDATORS = {d["name"]: Draft202012Validator(d["input_schema"]) for d in TOOL_DEFINITIONS}

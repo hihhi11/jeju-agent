@@ -220,6 +220,24 @@ def fetch(metric: Metric, filters: dict, group_cols: tuple[str, ...] = ()) -> pd
     return df
 
 
+def fetch_daily(metric: Metric, filters: dict) -> pd.DataFrame:
+    """일별 자료를 날짜별로 더하고 달력의 요일과 공휴일을 붙인다."""
+    where = [metric.where] if metric.where else []
+    params = []
+    for key, value in filters.items():
+        where.append(f"{metric.dims[key]} = ?")
+        params.append(value)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    df = query(
+        f"SELECT v.day, v.value, d.dayOfWeek, d.isWeekend, d.isOffDay FROM "
+        f"(SELECT {metric.time_col} AS day, sum({metric.value_col})::DOUBLE AS value FROM {metric.source} {where_sql} GROUP BY 1) v "
+        f"JOIN dim_date d ON d.baseDate = v.day ORDER BY v.day",
+        params,
+    )
+    df["month"] = pd.PeriodIndex(pd.to_datetime(df["day"]), freq="M")
+    return df
+
+
 def month_is_complete(metric: Metric, frame: pd.DataFrame) -> pd.Series:
     """그 달 값을 온전한 값으로 쓸 수 있는지. 일별 자료는 그 달의 날이 다 있어야 한다."""
     if metric.partial_days_ok:

@@ -1,4 +1,4 @@
-"""분석 도구 8개. LLM은 SQL을 쓰지 않고 이 함수와 조건만 고른다. 모든 수치는 여기서 계산한다."""
+"""분석 도구 9개. LLM은 SQL을 쓰지 않고 이 함수와 조건만 고른다. 모든 수치는 여기서 계산한다."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from agent.metrics import (
     catalog_limits,
     crosses_break,
     fetch,
+    fetch_daily,
     filter_period,
     month_is_complete,
     normalize_filters,
@@ -23,10 +24,15 @@ from agent.metrics import (
 from scripts.hub_list import load_hub_list
 
 STOPWORDS = {"데이터", "자료", "관련", "관련된", "뭐", "무엇", "어떤", "있어", "있나요", "볼", "수", "알려줘", "보고", "싶어"}
+# 거의 모든 자료에 들어 있는 말. 이 말만으로 찾으면 묻지 않은 자료가 찾은 것처럼 나온다
+GENERIC_TOKENS = {"관광", "관광객", "제주", "제주도", "정보", "현황", "통계", "이용", "비율", "얼마나", "많이"}
 JOSA = re.compile(r"(이랑|에서|으로|까지|부터|이나|도|는|은|이|가|을|를|의|로|에|랑|와|과)$")
 COVID_YEARS = (2020, 2021)
 # 이보다 날 수가 적은 구간은 값을 말하지 않는다
 MIN_WEATHER_DAYS = 20
+# 평일이나 주말의 날 수가 이보다 적으면 차이를 말하지 않는다
+MIN_DAY_TYPE_DAYS = 8
+DAYS_OF_WEEK = ["월", "화", "수", "목", "금", "토", "일"]
 # 기준값이 중앙값의 이 비율보다 작으면 비율이 크게 나온다고 표시한다
 SMALL_BASE_RATIO = 0.25
 
@@ -170,6 +176,7 @@ def _city_comparison(filters: dict, start: pd.Period, end: pd.Period) -> dict | 
 def find_data(query_text: str = "") -> ToolResult:
     """F1. 질문 키워드로 쓸 수 있는 데이터, 센터 전용 명세, 허브 목록을 찾는다."""
     tokens = _tokens(query_text)
+    tokens = [t for t in tokens if t not in GENERIC_TOKENS] or tokens
     catalog = query("SELECT * FROM data_catalog ORDER BY id")
     fields = ["title", "keywords", "description", "questions"]
     catalog["searchText"] = catalog[fields].fillna("").agg(" ".join, axis=1)
@@ -194,6 +201,8 @@ def find_data(query_text: str = "") -> ToolResult:
     usable_text = " ".join(catalog.loc[catalog["status"] == "사용", "searchText"])
     only_in_center = [tok for tok in tokens if tok not in usable_text and any(tok in f"{c['title']} {c['description']}" for c in center_rows)]
     status = "center_only" if only_in_center else "ok"
+    center_text = " ".join(f"{c['title']} {c['description']}" for c in center_rows)
+    not_found = [tok for tok in tokens if tok not in usable_text and tok not in center_text]
 
     excluded = catalog[(catalog["status"] == "제외") & (catalog["score"] > 0)]
     limits = ["센터 전용 데이터는 명세만 있어 값을 계산할 수 없다."]
@@ -204,6 +213,7 @@ def find_data(query_text: str = "") -> ToolResult:
         "centerMatches": center_rows[:10],
         "excluded": [{"title": r["title"], "reason": r["limits"]} for r in excluded.to_dict("records")],
         "tokensOnlyInCenter": only_in_center,
+        "tokensNotFound": not_found,
     }
     hub = load_hub_list()
     if hub is None:
@@ -219,6 +229,8 @@ def find_data(query_text: str = "") -> ToolResult:
         message = f"'{', '.join(only_in_center)}' 관련 값은 분석 가능한 자료에 없고 제주빅데이터센터 전용 명세에만 있습니다. 값을 계산할 수 없고 명세만 안내할 수 있습니다."
     elif not rows:
         message = "분석 가능한 자료에서 찾지 못했습니다."
+    elif not_found:
+        message = f"'{', '.join(not_found)}' 에 관한 값은 어떤 자료에도 없습니다. rows 는 나머지 낱말로 찾은 자료이므로 그 값으로 답하지 마세요."
     return ToolResult(
         status,
         message,
@@ -679,6 +691,60 @@ WEATHER_LIMITS = [
     "날씨 값은 4개 관측소 평균이다.",
     "같은 해·같은 달·같은 평일/휴일 구분의 날과 비교했다. 함께 나타나는 관계이며 날씨가 원인이라고 단정하지 않는다.",
 ]
+
+
+def get_day_pattern(metric: str, filters: dict | None = None, start: str | None = None, end: str | None = None) -> ToolResult:
+    """요일별 하루 평균과 평일·주말 차이. 요일마다 날 수가 달라 합계가 아니라 평균으로 비교한다."""
+    m = _metric_or_error(metric)
+    if isinstance(m, ToolResult):
+        return m
+    if not m.daily:
+        return _not_comparable(m, f"{m.label} 은 월별 자료라 요일을 나눌 수 없습니다.", {})
+    clean, problem = normalize_filters(m, filters)
+    if problem:
+        return problem
+    if m.id == "visitors_city" and "sigungu" not in clean:
+        return ToolResult("needs_clarification", "두 시를 더하지 않으므로 제주시와 서귀포시 중 하나를 골라야 합니다.", summary={"candidates": ["제주시", "서귀포시"]})
+    days = fetch_daily(m, clean)
+    if days.empty:
+        return ToolResult("not_found", "조건에 맞는 자료가 없습니다.", evidence=_evidence(m, "", 0, "조회", **_scope(m, clean)))
+    coverage = _coverage_text(days)
+    p_start, p_end = _period_args(start, end)
+    if p_start is None and p_end is None:
+        # 계절이 치우치지 않게 가장 최근의 온전한 12개월을 쓴다. 정류소 자료처럼 짧으면 있는 만큼 쓴다
+        counts = days.groupby("month", as_index=False).agg(value=("value", "sum"), days=("day", "nunique"))
+        complete = counts.loc[month_is_complete(m, counts), "month"]
+        p_end = complete.max() if not complete.empty else days["month"].max()
+        p_start = p_end - 11
+    frame = filter_period(days, p_start, p_end)
+    if frame.empty:
+        return ToolResult("out_of_range", f"요청 기간에 자료가 없습니다. 제공 기간은 {coverage} 입니다.", summary={"availablePeriod": coverage}, limits=catalog_limits(m))
+
+    used = _coverage_text(frame)
+    workdays = frame[~frame["isOffDay"]]
+    weekends = frame[frame["isWeekend"]]
+    holidays = frame[frame["isOffDay"] & ~frame["isWeekend"]]
+    evidence = _evidence(m, used, len(frame), "요일별 하루 평균. 평일은 공휴일을 뺀 날, 주말은 토요일과 일요일", **_scope(m, clean))
+    if min(len(workdays), len(weekends)) < MIN_DAY_TYPE_DAYS:
+        return ToolResult("insufficient_sample", f"평일 {len(workdays)}일, 주말 {len(weekends)}일뿐이라 차이를 말하지 않습니다.", evidence=evidence, summary={"availablePeriod": coverage}, limits=catalog_limits(m))
+
+    # 평일에 낀 공휴일은 쉬는 날이라 그 요일의 평균에서 뺀다
+    usual = frame[frame["isWeekend"] | ~frame["isOffDay"]]
+    by_day = usual.groupby("dayOfWeek")["value"].agg(["mean", "count"])
+    rows = [{"dayOfWeek": f"{d}요일", "days": int(by_day.loc[d, "count"]), "averageValue": round(by_day.loc[d, "mean"])} for d in DAYS_OF_WEEK if d in by_day.index]
+    workday_mean, weekend_mean = workdays["value"].mean(), weekends["value"].mean()
+    summary = {
+        "availablePeriod": coverage,
+        "workdayAverage": round(workday_mean),
+        "workdayDays": len(workdays),
+        "weekendAverage": round(weekend_mean),
+        "weekendDays": len(weekends),
+        "weekendVsWorkdayPct": pct_change(weekend_mean, workday_mean),
+        "weekdayHolidayDays": len(holidays),
+    }
+    limits = catalog_limits(m) + [f"하루 평균을 비교한 값이다. 평일 평균은 평일 공휴일 {len(holidays)}일을 뺀 {len(workdays)}일 기준이고, 주말은 {len(weekends)}일 기준이다."]
+    chart = {"type": "bar", "x": "dayOfWeek", "y": "averageValue", "series": None, "title": f"{m.label} 요일별 하루 평균"}
+    return ToolResult("ok", rows=rows, summary=summary, chart=chart, evidence=evidence, limits=limits)
 
 
 def _weather_effect_rows(frame: pd.DataFrame, weather: str, bins: list[float] | None) -> tuple[list[dict], str]:

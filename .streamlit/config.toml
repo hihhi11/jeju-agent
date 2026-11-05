@@ -1,0 +1,18 @@
+# 다른 PC에서 접속하지 못하게 이 컴퓨터로 제한하고, 사용 통계와 첫 실행 이메일 질문을 끈다
+[server]
+address = "localhost"
+showEmailPrompt = false
+
+[browser]
+gatherUsageStats = false
+
+# 코드의 값이 화면에 저절로 찍히지 않게 한다
+[runner]
+magicEnabled = false
+
+# 개발자용 메뉴(Deploy 등)를 숨긴다
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
