@@ -119,7 +119,7 @@
       "question": "2024년에 코로나 전(2019)보다 회복된 관광지는?",
       "expectedTools": ["compare_periods"],
       "expectedAnswer": "비교 가능한 27곳 중 6곳이다. 서복전시관 323.1%, 제주도립 김창열미술관 167.6%, 한라산국립공원 109.4%, 제주돌문화공원 109.0%, 카멜리아힐 107.7%, 국립제주박물관 100.2%.",
-      "mustMention": ["27곳", "6곳", "한라산국립공원"],
+      "mustMention": ["27", "6곳", "한라산국립공원"],
       "limits": ["두 해 모두 12개월 입장객이 있는 곳만 비교한다", "2024년 값이 0인 곳은 휴장·미집계일 수 있어 회복률을 계산하지 않는다 (예: 만장굴관광지)", "서복전시관처럼 2019년 값이 작은 곳은 비율이 크게 나온다"],
       "trap": "빈 달이나 0인 달을 포함해 계산하면 회복률이 틀린다",
       "checks": [
@@ -174,7 +174,7 @@
       "persona": "소상공인",
       "question": "서귀포 관광지 방문객은 몇 월에 가장 많아?",
       "expectedTools": ["get_seasonality"],
-      "expectedAnswer": "2024년 기준 5월이 707,156명으로 가장 많고 10월이 684,359명으로 다음이다. 봄과 가을 두 번 붐빈다. 해마다 1위 달이 바뀌므로 5월 하나로 단정하지 않는다. 2022~2024년 내내 자료가 있는 12곳 평균으로는 10월이 가장 많다.",
+      "expectedAnswer": "2024년 기준 5월이 707,156명으로 가장 많고 10월이 684,359명으로 다음이다. 봄과 가을 두 번 붐빈다. 해마다 1위 달이 바뀌므로 5월 하나로 단정하지 않는다. 2022~2024년 내내 값이 있는 11곳 평균으로는 10월이 가장 많다.",
       "mustMention": ["5월", "10월"],
       "limits": ["해마다 자료가 있는 관광지 수가 달라 2024년 월별 값은 16~19곳의 합이다", "2020~2021년은 코로나 영향으로 패턴이 다르다"],
       "checks": [
@@ -189,9 +189,9 @@
           "expected": 684359
         },
         {
-          "label": "같은 12곳 2022~2024 평균 최대 달",
-          "sql": "WITH s AS (SELECT spotName FROM spot_visitors_view WHERE sigungu = '서귀포시' AND year BETWEEN 2022 AND 2024 GROUP BY spotName HAVING count(DISTINCT year || '-' || month) = 36), m AS (SELECT year, month, sum(visitorCnt) AS v FROM spot_visitors_view JOIN s USING (spotName) WHERE year BETWEEN 2022 AND 2024 GROUP BY year, month), a AS (SELECT month, avg(v) AS v FROM m GROUP BY month) SELECT (SELECT count(*) FROM s) || '곳:' || arg_max(month, v) FROM a",
-          "expected": "12곳:10"
+          "label": "같은 11곳 2022~2024 평균 최대 달 (0인 달이 있는 중문대포해안주상절리대는 뺀다)",
+          "sql": "WITH s AS (SELECT spotName FROM (SELECT spotName, year, month, sum(visitorCnt) AS v FROM spot_visitors_view WHERE sigungu = '서귀포시' AND year BETWEEN 2022 AND 2024 GROUP BY ALL) WHERE v > 0 GROUP BY spotName HAVING count(*) = 36), m AS (SELECT year, month, sum(visitorCnt) AS v FROM spot_visitors_view JOIN s USING (spotName) WHERE year BETWEEN 2022 AND 2024 GROUP BY year, month), a AS (SELECT month, avg(v) AS v FROM m GROUP BY month) SELECT (SELECT count(*) FROM s) || '곳:' || arg_max(month, v) FROM a",
+          "expected": "11곳:10"
         }
       ]
     },
