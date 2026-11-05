@@ -4,6 +4,7 @@
 
 버스 원본은 행이 많아 집계해서 넣는다. bus_daily 는 2026-10까지 온전한 달로, tour_local 은 CSV가 있어야 만들어진다.
 결과가 원본과 맞지 않으면 예외를 내고 기존 DB를 건드리지 않는다.
+허브 목록은 배포가 금지되어 이 DB에 넣지 않는다 (scripts/hub_list.py 가 받은 파일을 직접 읽는다).
 """
 
 from __future__ import annotations
@@ -446,38 +447,6 @@ def _load_center_spec(con: duckdb.DuckDBPyConnection) -> None:
     print(f"  센터 명세: 데이터 {len(datasets)}종, 컬럼 {len(columns)}개")
 
 
-def _load_hub_list(con: duckdb.DuckDBPyConnection) -> None:
-    path = _path("DATA_RAW_DIR", "data/raw") / "hub_list.json"
-    if not path.exists():
-        raise FileNotFoundError(f"{path} 가 없습니다. 만드는 방법은 data/README.md 에 있습니다")
-    listing = json.loads(path.read_text(encoding="utf-8-sig"))
-    rows = listing["data"]
-    if len(rows) != listing["recordsTotal"]:
-        raise ValueError(f"허브 목록이 잘렸습니다: {len(rows)}/{listing['recordsTotal']}건")
-    con.execute("""
-        CREATE TABLE hub_datasets (
-            hubId INTEGER PRIMARY KEY, title VARCHAR, category VARCHAR, owner VARCHAR,
-            hasApi BOOLEAN, hasFile BOOLEAN, hasLink BOOLEAN, startDate DATE, endDate DATE, updatedDate DATE,
-            viewCount INTEGER, description VARCHAR
-        )
-    """)
-    con.executemany(
-        "INSERT INTO hub_datasets VALUES (?, ?, ?, ?, ?, ?, ?, TRY_CAST(? AS DATE), TRY_CAST(? AS DATE), TRY_CAST(? AS DATE), ?, ?)",
-        [
-            (
-                r["id"], _clean(r["title"]), r["categoryName"], _clean(r["owner"]),
-                r["dataApi"] is not None, r["dataFile"] is not None, r["dataLink"] is not None,
-                r["startDate"], r["endDate"], r["updateAt"], r["viewCount"], _clean(r["description"]),
-            )
-            for r in rows
-        ],
-    )  # fmt: skip
-    # 허브에 적힌 기간에는 9999-12-31, 0210-08-01 같은 값이 있어 비워 둔다
-    con.execute("UPDATE hub_datasets SET endDate = NULL WHERE year(endDate) NOT BETWEEN 1900 AND 2100")
-    con.execute("UPDATE hub_datasets SET startDate = NULL WHERE year(startDate) NOT BETWEEN 1900 AND 2100")
-    print(f"  허브 목록: {len(rows)}건")
-
-
 def _load_catalog(con: duckdb.DuckDBPyConnection) -> None:
     catalog = json.loads((REFERENCE_DIR / "catalog.json").read_text(encoding="utf-8"))
     con.execute("""
@@ -654,7 +623,6 @@ def main() -> int:
             ("정류소별 이용자", lambda: _load_bus_station(con, src)),
             ("버스 집계, 정류소 이름 통일", lambda: _load_bus(con, src)),
             ("센터 명세", lambda: _load_center_spec(con)),
-            ("허브 목록", lambda: _load_hub_list(con)),
             ("카탈로그", lambda: _load_catalog(con)),
             ("원본 대조", lambda: _check(con, src)),
         )
