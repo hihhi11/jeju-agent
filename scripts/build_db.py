@@ -26,6 +26,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 REFERENCE_DIR = PROJECT_ROOT / "reference"
 CENTER_SPEC = PROJECT_ROOT / "데이터_센터_명세_v12_데이터명세서_kr.xlsx"
 # 노선 수가 앞뒤 14일 중앙값의 이 범위를 벗어나면 원본 일부 누락·중복으로 본다
+CARD_RATIO_LOW = 0.97
+CARD_RATIO_HIGH = 1.01
 ROUTE_RATIO_LOW = 0.7
 ROUTE_RATIO_HIGH = 1.5
 # bus_daily.csv 는 마지막에 받은 기간으로 덮어써지므로 어느 달 1일부터 이 날까지 빠짐없는지 확인한다
@@ -84,6 +86,23 @@ def _load_base_tables(con: duckdb.DuckDBPyConnection, src) -> None:
     con.execute(f"""
         CREATE TABLE bus_stops AS
         SELECT *, NULLIF(regexp_extract(stationAddress, '(제주시|서귀포시)'), '') AS sigungu FROM {src('bus_stops')}
+    """)
+
+
+def _load_card(con: duckdb.DuckDBPyConnection, src) -> None:
+    # 내국인은 제주도민이 따로 있어 도민이 아닌 내국인으로 추정한다. 제공처 정의는 찾지 못했다
+    group = """CASE userType WHEN '제주도민' THEN '제주도민' WHEN '법인' THEN '법인'
+                WHEN '내국인' THEN '관광객(추정)' WHEN '중국' THEN '관광객(추정)' WHEN '일본' THEN '관광객(추정)'
+                WHEN '동남아' THEN '관광객(추정)' WHEN '기타외국' THEN '관광객(추정)' END"""
+    con.execute(f"""
+        CREATE TABLE card_industry_monthly AS
+        SELECT dtYearMonth, industry, userType, {group} AS spenderGroup, sex, cardUsers, useCount, useAmount
+        FROM {src('card_industry_monthly')}
+    """)
+    con.execute(f"""
+        CREATE TABLE card_time_monthly AS
+        SELECT dtYearMonth, timeSlot, userType, {group} AS spenderGroup, ageRange, useAmountMillion * 1000000 AS useAmount
+        FROM {src('card_time_monthly')}
     """)
 
 
@@ -538,6 +557,23 @@ def _check(con: duckdb.DuckDBPyConnection, src) -> None:
     same("정류소별 이용자 합계", "SELECT sum(userCnt) FROM bus_station_daily", f"SELECT sum(userCount) FROM {src('bus_daily')}")
     same("정류소별 이용자 행 수", "SELECT count(*) FROM bus_station_daily", f"SELECT count(*) FROM {src('bus_daily')}")
 
+    same("카드 업종 금액 합계", "SELECT sum(useAmount) FROM card_industry_monthly", f"SELECT sum(useAmount) FROM {src('card_industry_monthly')}")
+    same("카드 시간대 금액 합계", "SELECT sum(useAmount) FROM card_time_monthly", f"SELECT sum(useAmountMillion) * 1000000 FROM {src('card_time_monthly')}")
+    for table, key in (("card_industry_monthly", "industry, sex"), ("card_time_monthly", "timeSlot, ageRange")):
+        if one(f"SELECT count(*) FROM {table} WHERE spenderGroup IS NULL"):
+            raise ValueError(f"{table}: 나누지 못한 이용자 유형이 있습니다")
+        if one(f"SELECT count(*) FROM (SELECT 1 FROM {table} GROUP BY dtYearMonth, userType, {key} HAVING count(*) > 1)"):
+            raise ValueError(f"{table}: 같은 조건의 행이 여럿입니다")
+    # 시간대 파일은 백만 원 아래를 버린 것으로 보여 조금 작다. 크게 벗어나면 다른 자료가 된 것이다
+    low, high = con.execute("""
+        SELECT min(t.v / i.v), max(t.v / i.v) FROM
+        (SELECT dtYearMonth, sum(useAmount) AS v FROM card_time_monthly GROUP BY 1) t JOIN
+        (SELECT dtYearMonth, sum(useAmount) AS v FROM card_industry_monthly GROUP BY 1) i USING (dtYearMonth)
+    """).fetchone()
+    if low < CARD_RATIO_LOW or high > CARD_RATIO_HIGH:
+        raise ValueError(f"카드 시간대·업종 금액 비율이 벗어났습니다: {low:.3f}~{high:.3f}")
+    print(f"  카드 시간대/업종 금액 비율: {low:.3f}~{high:.3f}")
+
     uneven = one("""
         SELECT count(*) FROM (
             SELECT dtYearMonth FROM visit_purpose GROUP BY dtYearMonth
@@ -617,6 +653,7 @@ def main() -> int:
         steps = (
             ("기본 표", lambda: _load_base_tables(con, src)),
             ("외국인 입도객", lambda: _load_foreign_arrivals(con, src)),
+            ("카드 이용", lambda: _load_card(con, src)),
             ("관광지 표기·시군", lambda: _load_spots(con)),
             ("날짜·기상", lambda: _load_calendar_and_weather(con, src)),
             ("기초지자체 방문자", lambda: _load_tour_local(con, src)),

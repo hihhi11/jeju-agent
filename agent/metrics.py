@@ -129,6 +129,32 @@ METRICS: dict[str, Metric] = {
             limits=("원본 일부 누락으로 보이는 날은 합계에서 뺐다. 제공처에 확인한 것은 아니다.", "다른 버스 자료와 인원 정의가 달라 더하거나 비교하지 않는다."),
             note="최신 정류소별 버스 승차·환승. 다른 버스 자료와 비교 불가",
         ),
+        Metric(
+            "card_industry", "업종별 카드 이용금액", "원", "card_industry_monthly", "dtYearMonth", "useAmount", "card_industry_monthly",
+            {"industry": "industry", "spenderGroup": "spenderGroup", "userType": "userType", "sex": "sex"},
+            default_group="industry",
+            defaults={"spenderGroup": "관광객(추정)"},
+            limits=(
+                "특정 카드 자료로 보이며 제주 전체 소비액이 아니다. 어느 카드사 자료인지 알 수 없고 외국 카드 대부분이 빠졌을 수 있다.",
+                "관광객(추정)은 내국인과 외국인 유형을 더한 값이다. 내국인을 도민이 아닌 내국인으로 추정했을 뿐 제공처 정의가 없고, 관광 목적인지 알 수 없다.",
+                "금액이 줄거나 늘어도 소비 변화인지 카드 집계 범위 변화인지 알 수 없어 원인을 단정하지 않는다.",
+                "이용자 수를 더할 수 없어 1인당 금액은 계산하지 않는다.",
+            ),
+            note="업종별 소비. 기본은 관광객(추정)이고 spenderGroup 으로 제주도민, 법인을 고른다. 나라별은 userType",
+        ),
+        Metric(
+            "card_time", "시간대별 카드 이용금액", "원", "card_time_monthly", "dtYearMonth", "useAmount", "card_time_monthly",
+            {"timeSlot": "timeSlot", "spenderGroup": "spenderGroup", "userType": "userType", "ageRange": "ageRange"},
+            default_group="timeSlot",
+            defaults={"spenderGroup": "관광객(추정)"},
+            limits=(
+                "특정 카드 자료로 보이며 제주 전체 소비액이 아니다. 어느 카드사 자료인지 알 수 없고 외국 카드 대부분이 빠졌을 수 있다.",
+                "관광객(추정)은 내국인과 외국인 유형을 더한 값이다. 내국인을 도민이 아닌 내국인으로 추정했을 뿐 제공처 정의가 없고, 관광 목적인지 알 수 없다.",
+                "금액이 줄거나 늘어도 소비 변화인지 카드 집계 범위 변화인지 알 수 없어 원인을 단정하지 않는다.",
+                "이용자 수를 더할 수 없어 1인당 금액은 계산하지 않는다.",
+            ) + ("시간대 구간의 정확한 시각은 자료에 없다.", "원본이 백만 원 단위라 업종별 합계보다 조금 작다."),
+            note="시간대(오전, 점심, 오후, 저녁, 밤)별 소비. 기본은 관광객(추정)이고 spenderGroup 으로 제주도민, 법인을 고른다",
+        ),
     ]
 }
 
@@ -160,7 +186,7 @@ def resolve_spot_name(name: str) -> tuple[str | None, list[str]]:
     return (names[0], []) if len(names) == 1 else (None, names)
 
 
-def normalize_filters(metric: Metric, filters: dict | None) -> tuple[dict, ToolResult | None]:
+def normalize_filters(metric: Metric, filters: dict | None, group_by: str | None = None) -> tuple[dict, ToolResult | None]:
     """필터를 확인해 DB 값으로 바꾼다. 필요한 값이 없거나 모호하면 되묻는 결과를 돌려준다."""
     clean = {k: v for k, v in (filters or {}).items() if v not in (None, "")}
     for key in clean:
@@ -197,7 +223,9 @@ def normalize_filters(metric: Metric, filters: dict | None) -> tuple[dict, ToolR
         if key not in clean:
             return {}, needs_clarification(f"{metric.label} 은 {key} 를 골라야 합니다.", distinct_values(metric.id, key))
     for key, value in metric.defaults.items():
-        clean.setdefault(key, value)
+        # 이 기준으로 나눠 보거나 더 좁은 유형을 골랐으면 기본값으로 좁히지 않는다
+        if key != group_by and not (key == "spenderGroup" and "userType" in clean):
+            clean.setdefault(key, value)
     return clean, None
 
 

@@ -51,7 +51,8 @@ def check_tools() -> None:
     check("Q01 관광지 자료 끝", next(r["endDate"] for r in clean(q01.rows) if r["id"] == "spot_visitors_monthly"), "2024-12-01")
 
     q02 = find_data("관광객 카드 소비")
-    check("Q02 센터 전용", q02.status, "center_only")
+    check("Q02 카드 자료를 찾음", (q02.status, "card_industry_monthly" in [r["id"] for r in q02.rows]), ("ok", True))
+    check("Q19 없는 단위는 센터 전용", find_data("읍면동 카드").status, "center_only")
     check("Q02 명세 조회", describe_data("1-01").status, "center_only")
     check("Q02 반출 불가", describe_data("1-01").summary["exportable"], False)
     check("허브 목록은 LLM에 보내지 않음", "hubMatches" in q02.to_llm_json(), False)
@@ -76,6 +77,22 @@ def check_tools() -> None:
     check("요일: 없는 기간", get_day_pattern("visitors_jeju", {"visitorClass": "외지인"}, "2010", "2011").status, "out_of_range")
     check("요일: 날이 부족하면 말하지 않음", get_day_pattern("visitors_jeju", {"visitorClass": "외지인"}, "2025-10", "2025-10").status in ("ok", "insufficient_sample"), True)
     check("요일: 필수 필터 확인", get_day_pattern("visitors_jeju").status, "needs_clarification")
+
+    q17 = rank_values("card_industry", "2024", "2024", top_n=2)
+    check("Q17 업종 순위", [(r["industry"], r["value"]) for r in rows_of(q17)], [("한식 음식점업", 122955906331), ("면세점", 69826869653)])
+    check("카드: 기본은 관광객(추정)", q17.evidence["filters"]["spenderGroup"], "관광객(추정)")
+    check("카드: 전체 소비액이 아니라고 알림", any("제주 전체 소비액이 아니다" in t for t in q17.limits), True)
+    check("Q18 시간대 순위", [(r["timeSlot"], r["value"]) for r in rows_of(rank_values("card_time", "2024", "2024", top_n=2))], [("오후", 161141000000), ("저녁", 146855000000)])
+    resident = rows_of(rank_values("card_industry", "2024", "2024", {"spenderGroup": "제주도민"}, top_n=1))[0]
+    check("카드: 도민 필터", (resident["industry"], resident["value"]), ("한식 음식점업", 163599671255))
+    check("카드: 이용자 유형을 고르면 기본값을 쓰지 않음", "spenderGroup" in rank_values("card_industry", "2024", "2024", {"userType": "중국"}).evidence["filters"], False)
+    groups = rows_of(rank_values("card_industry", "2024", "2024", group_by="spenderGroup"))
+    check("카드: 구분별로 나눠 볼 수 있음", sorted(r["spenderGroup"] for r in groups), ["관광객(추정)", "법인", "제주도민"])
+    check("카드: 모호한 업종은 되묻기", get_trend("card_industry", {"industry": "음식점"}).status, "needs_clarification")
+    check("카드: 일부 달만 있는 2025년은 비교 안 함", {r["period"]: r["isComplete"] for r in rows_of(get_trend("card_industry"))}["2025"], False)
+    check("카드: 회복률 계산", compare_periods("card_industry", "2019", "2019", "2024", "2024", {"industry": "호텔업"}).status, "ok")
+    check("카드: 월별 패턴", get_seasonality("card_industry", {"industry": "호텔업"}).status, "ok")
+    check("카드: 원 단위 차트는 억 원", (build_figure(q17).data[0].x[0], build_figure(q17).layout.xaxis.ticksuffix), (1229.6, "억 원"))
 
     q03 = rank_values("spot_visitors", "2024", "2024", top_n=5)
     check("Q03 순위", [(r["spot"], r["value"]) for r in rows_of(q03)], [("한라산국립공원", 928409), ("성산일출봉", 906188), ("천지연폭포", 890241), ("중문대포해안주상절리대", 816210), ("카멜리아힐", 774153)])
@@ -167,7 +184,7 @@ def check_expected_answers() -> None:
     """시험 문제의 기대 답을 그대로 말하면 숫자 대조를 통과해야 한다. 대조가 맞는 답을 막지 않는지 본다."""
     results = {
         "Q01": [find_data("관광")],
-        "Q02": [find_data("카드"), describe_data("1-01")],
+        "Q02": [find_data("카드")],
         "Q03": [rank_values("spot_visitors", "2024", "2024", top_n=5)],
         "Q04": [get_trend("visit_purpose", {"purpose": "레저스포츠"})],
         "Q05": [get_trend("arrivals", start="2024", end="2024")],
@@ -182,6 +199,9 @@ def check_expected_answers() -> None:
         "Q14": [rank_values("bus_station", "2026-10", "2026-10", top_n=3)],
         "Q15": [analyze_weather_effect(date="2026-10-24")],
         "Q16": [compare_periods("bus_station", "2025-10", "2025-10", "2026-10", "2026-10")],
+        "Q17": [rank_values("card_industry", "2024", "2024", top_n=5)],
+        "Q18": [rank_values("card_time", "2024", "2024")],
+        "Q19": [find_data("읍면동 카드"), describe_data("1-01")],
     }
     questions = json.loads((PROJECT_ROOT / "reference" / "eval_questions.json").read_text(encoding="utf-8"))["questions"]
     for q in questions:

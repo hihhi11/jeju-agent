@@ -45,6 +45,20 @@ COLUMN_LABELS = {
     "isSmallBase": "기준 값이 작음",
     "month": "월",
     "dayOfWeek": "요일",
+    "industry": "업종",
+    "spenderGroup": "이용자 구분",
+    "userType": "이용자",
+    "timeSlot": "시간대",
+    "sex": "성별",
+    "ageRange": "연령대",
+    "nationality": "국가",
+    "purpose": "목적",
+    "classType": "구분",
+    "direction": "방향",
+    "airport": "공항",
+    "visitorClass": "방문자 구분",
+    "moveType": "승차·환승",
+    "priceType": "요금 유형",
     "latestYearValue": "최근 해 값",
     "averageValue": "평균",
     "latestYearSpotCount": "최근 해 관광지 수",
@@ -189,16 +203,20 @@ def build_figure(result: ToolResult) -> go.Figure | None:
     if len(groups) > MAX_SERIES:
         return None
     unit = _unit(result, y)
+    # 원 단위 금액은 자릿수가 많아 축에서 읽기 어렵다. 표에는 원 단위를 그대로 둔다
+    scale = 100_000_000 if unit == "원" else 1
+    unit = "억 원" if scale > 1 else unit
     # 이름 순위는 눕혀서 그린다. 시간과 구간은 왼쪽에서 오른쪽으로 읽는다
     horizontal = spec["type"] == "bar" and x not in TIME_AXES
     categories = list(dict.fromkeys(_x_text(x, r[x]) for r in rows))
-    peak = max((abs(r[y]) for r in rows if r.get(y) is not None), default=None)
+    scaled = lambda v: v if v is None or scale == 1 else round(v / scale, 1)  # noqa: E731
+    peak = max((abs(scaled(r[y])) for r in rows if r.get(y) is not None), default=None)
 
     fig = go.Figure()
     for index, group in enumerate(groups):
         part = [r for r in rows if not series or r[series] == group]
         labels = [_x_text(x, r[x]) for r in part]
-        values = [r.get(y) for r in part]
+        values = [scaled(r.get(y)) for r in part]
         color = SERIES_COLORS[index]
         name = str(group) if series else result_title(result)
         hover = f"%{{{'y' if horizontal else 'x'}}}<br>{name}: %{{{'x' if horizontal else 'y'}:,}}{unit}<extra></extra>"

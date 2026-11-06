@@ -287,6 +287,37 @@ def bus_hourly(srcs: list[Path], out: Path) -> None:
     )
 
 
+def card_industry_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"base_year_month": str})
+    frame = pd.DataFrame(
+        {
+            "dtYearMonth": _month_start(df["base_year_month"], "%Y%m"),
+            # 원본의 일부 달에 업종 이름이 '기타음?식료품위주종합소매업' 으로 깨져 있다
+            "industry": df["biz_nm"].str.replace("?", "", regex=False),
+            "userType": df["user_type"],
+            "sex": df["sex"],
+            "cardUsers": df["user_count"],
+            "useCount": df["use_count"],
+            "useAmount": df["use_amount"],
+        }
+    )
+    _save_df(frame, out)
+
+
+def card_time_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"base_year_month": str})
+    frame = pd.DataFrame(
+        {
+            "dtYearMonth": _month_start(df["base_year_month"], "%Y%m"),
+            "timeSlot": df["time_type"],
+            "userType": df["user_type"],
+            "ageRange": df["age_range"],
+            "useAmountMillion": df["use_amout_by_million"],
+        }
+    )
+    _save_df(frame, out)
+
+
 @dataclass(frozen=True)
 class Dataset:
     desc: str
@@ -329,6 +360,16 @@ DATASETS = {
         "제주 여객선 연간 수송 인원 (선박·항로별)",
         ("제주특별자치도여객선수송통계(여객).csv",),
         ferry_passengers_yearly,
+    ),
+    "card_industry_monthly": Dataset(
+        "업종별 성별 카드 이용 (월·업종·이용자 유형)",
+        ("업종별성별카드이용정보.csv",),
+        card_industry_monthly,
+    ),
+    "card_time_monthly": Dataset(
+        "시간대별 카드 이용금액 (월·시간대·이용자 유형·연령)",
+        ("시간대별카드이용금액현황.csv",),
+        card_time_monthly,
     ),
     "bus_hourly": Dataset(
         "일별 시간대별 버스 승차 인원",

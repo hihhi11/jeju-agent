@@ -296,7 +296,7 @@ def get_trend(metric: str, filters: dict | None = None, start: str | None = None
         return m
     if grain not in ("year", "month"):
         return invalid("grain 은 year 또는 month 입니다.")
-    clean, problem = normalize_filters(m, filters)
+    clean, problem = normalize_filters(m, filters, group_by)
     if problem:
         return problem
     if group_by and group_by not in m.dims:
@@ -429,7 +429,7 @@ def rank_values(metric: str, start: str | None = None, end: str | None = None, f
     m = _metric_or_error(metric)
     if isinstance(m, ToolResult):
         return m
-    clean, problem = normalize_filters(m, filters)
+    clean, problem = normalize_filters(m, filters, group_by)
     if problem:
         return problem
     group = group_by or m.default_group
@@ -530,7 +530,7 @@ def compare_periods(metric: str, period_a_start: str, period_a_end: str, period_
     m = _metric_or_error(metric)
     if isinstance(m, ToolResult):
         return m
-    clean, problem = normalize_filters(m, filters)
+    clean, problem = normalize_filters(m, filters, group_by)
     if problem:
         return problem
     if group_by and group_by not in m.dims:

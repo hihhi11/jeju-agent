@@ -30,6 +30,10 @@ _FILTERS = {
         "stationId": {"type": "string"},
         "moveType": {"type": "string", "enum": ["승차", "환승"]},
         "priceType": {"type": "string"},
+        "industry": {"type": "string", "description": "카드 이용 업종 (예: 한식 음식점업, 호텔업, 면세점)"},
+        "spenderGroup": {"type": "string", "enum": ["관광객(추정)", "제주도민", "법인"]},
+        "userType": {"type": "string", "enum": ["내국인", "제주도민", "법인", "중국", "일본", "동남아", "기타외국"]},
+        "timeSlot": {"type": "string", "enum": ["오전", "점심", "오후", "저녁", "밤"]},
     },
     "additionalProperties": False,
 }
