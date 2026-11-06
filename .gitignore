@@ -9,3 +9,5 @@ venv/
 CLAUDE.md
 # 대회 제공 허브 목록: DAKER 외부 배포 금지. 데이터 폴더 밖에 두어도 올라가지 않게 막는다
 제주데이터허브*.xlsx
+# 대회 규칙·게시판 답변 정리: 확인용이라 제출물과 GitHub에 넣지 않는다
+COMPETITION.md
