@@ -15,6 +15,11 @@ _ARRIVALS_LONG = (
 )
 
 SIGUNGU_NAMES = {"제주": "제주시", "서귀포": "서귀포시"}
+PLATFORM_PREFIX = "제주관광빅데이터플랫폼에서 받은 자료다."
+RENTAL_LIMITS = (
+    PLATFORM_PREFIX + " 제주특별자치도 렌터카조합 집계라 조합에 속하지 않은 업체는 빠졌을 수 있다.",
+    "2023-01~2025-10만 있고 그 뒤 갱신이 멈췄다. 어느 지역에서 빌리고 다니는지는 없다.",
+)
 
 
 @dataclass(frozen=True)
@@ -67,8 +72,8 @@ METRICS: dict[str, Metric] = {
             alternatives=(
                 {"metric": "air_passengers", "filters": {"direction": "도착"}, "label": "제주 공항 도착 이용자", "note": "입도객 수가 아니라 항공 이용자 지표다. 도민 등을 포함하고 배편을 포함하지 않는다."},
             ),
-            limits=("내국인 값은 허브 자료를 대조해 내국인으로 추정한 것이다.",),
-            note="제주 입도객 합계. 입도객 전체 수는 이 지표만 쓴다",
+            limits=("2001-01~2026-08 관광협회 집계(제주관광빅데이터플랫폼)다. 2021-08 이후 값은 허브 방문목적별·국가별 입도객 합계와 같다.", "방문목적과 국가별 구분은 2021-08부터만 있다."),
+            note="제주 입도객 합계(2001년부터). 입도객 전체 수와 2019년 대비 회복률은 이 지표를 쓴다",
         ),
         Metric(
             "visit_purpose", "방문목적·여행형태별 입도객", "명", "visit_purpose", "dtYearMonth", "visitorCnt", "visit_purpose",
@@ -173,6 +178,79 @@ METRICS: dict[str, Metric] = {
                 "지역별 표본 수와 체감·전망의 정확한 정의는 파일에 없다.",
             ),
             note="소상공인 체감·전망 경기지수. 기본은 제주 체감이고 region(전국, 시도)과 outlook(체감/전망)을 고른다. 여러 달은 평균한다",
+        ),
+        Metric(
+            "cruise_passengers", "크루즈 승객", "명", "cruise_monthly", "dtYearMonth", "passengerCnt", "cruise_monthly",
+            {"passengerType": "passengerType", "ship": "ship"},
+            default_group="passengerType",
+            limits=(
+                PLATFORM_PREFIX + " 2024-01~2026-10 입항 선박의 승객 수이고, 진행 중이던 2026-11은 뺐다.",
+                "승객 0명인 입항이 28건 있다. 입항 취소로 보이나 확인하지 못했다.",
+                "입도객 통계에 크루즈 승객이 따로 들어가는지 확인하지 못해 입도객과 더하거나 비교하지 않는다.",
+                "이용 조건 칸이 플랫폼 페이지에 비어 있어 확인하지 못했다.",
+            ),
+            note="크루즈 입항 승객. passengerType(한국인/외국인), ship(선박명)",
+        ),
+        Metric(
+            "rental_utilization", "렌터카 가동률", "%", "rental_car_monthly", "dtYearMonth", "utilizationPct", "rental_car_monthly",
+            {},
+            agg="mean",
+            limits=RENTAL_LIMITS + ("가동률 산식은 자료에 없다. 여러 달은 평균한다. 증감은 % 가 아니라 포인트 차이(changePoints, yoyPoints)로 말한다.",),
+            note="렌터카 월별 가동률(%). 필터 없음. 2023-01~2025-10",
+        ),
+        Metric(
+            "rental_fleet", "렌터카 등록대수", "대", "rental_car_monthly", "dtYearMonth", "fleetCnt", "rental_car_monthly",
+            {},
+            agg="mean",
+            limits=RENTAL_LIMITS + ("등록대수는 그 달의 대수라 여러 달은 평균한다. 2025-10 등록대수가 전달보다 약 19% 적은데 원인은 확인하지 못했다.",),
+            note="렌터카 등록대수. 필터 없음. 여러 달은 평균",
+        ),
+        Metric(
+            "rental_hours", "렌터카 대여 시간", "시간", "rental_hours_monthly", "dtYearMonth", "rentHours", "rental_car_monthly",
+            {"carType": "carType"},
+            default_group="carType",
+            limits=RENTAL_LIMITS + ("대여 시간의 단위는 자료에 적혀 있지 않다. 2023-10과 2024-09는 원본 총계가 승용·승합 합보다 1시간, 60시간 작다.",),
+            note="렌터카 대여 시간 합계. carType(승용차/승합차)",
+        ),
+        Metric(
+            "vehicle_arrivals", "읍면동 차량 도착 건수", "건", "vehicle_arrivals_monthly", "dtYearMonth", "arrivalCnt", "vehicle_arrivals_monthly",
+            {"area": "area", "sigungu": "sigungu"},
+            default_group="area",
+            break_month="2026-01",
+            limits=(
+                PLATFORM_PREFIX + " 티맵 내비게이션으로 목적지에 도착한 건수라 사람 수가 아니고, 티맵을 쓰지 않은 차는 빠진다.",
+                "받은 파일은 도민과 관광객을 나누지 않는다.",
+                "2026-01부터 제공사의 도착 집계 방식이 바뀌어 그 전과 비교하지 않는다.",
+                "2022-10은 추자면 값이 없다.",
+            ),
+            note="읍면동별 차량 도착 건수(티맵). 차로 많이 찾는 곳. 2026-01을 넘는 비교 불가",
+        ),
+        Metric(
+            "area_visitors", "읍면동 방문객 추정치", "명(월 합계)", "area_visitors_monthly", "dtYearMonth", "visitorCnt", "area_visitors_monthly",
+            {"area": "area", "sigungu": "sigungu", "visitorType": "visitorType"},
+            default_group="area",
+            breakdown="visitorType",
+            limits=(
+                PLATFORM_PREFIX + " SKT 통신 자료로 추정한 값이다.",
+                "방문객을 세는 기준(도민 포함 여부, 같은 사람을 여러 번 세는지)이 자료에 없어 실제 사람 수로 말하지 않는다.",
+                "시별 방문자 추정치와 출처·기준이 달라 비교하거나 더하지 않는다.",
+                "이용 조건 칸이 플랫폼 페이지에 비어 있어 확인하지 못했다.",
+            ),
+            note="읍면동별 월간 방문객(SKT). 관광객이 몰리는 읍면동. visitorType(내국인/외국인)",
+        ),
+        Metric(
+            "tourist_spending", "내국인 관광객 1인당 지출", "원", "tourist_spending_monthly", "dtYearMonth", "amount", "tourist_spending_monthly",
+            {"item": "item"},
+            default_group="item",
+            agg="mean",
+            limits=(
+                "제주관광공사 방문관광객 실태조사(내국인 표본 설문)의 1인당 지출 경비다. 여행 한 번 기준으로 보이나 파일에 기준이 적혀 있지 않고, 하루 기준 값은 없다.",
+                "2025년 1~12월만 있어 다른 해와 비교할 수 없다. 외국인 관광객은 들어 있지 않다.",
+                "항목을 모두 더한 값이 1인당 전체 지출이다. 항공 및 선박료처럼 제주 밖에서 낸 돈도 들어 있다.",
+                "연·기간 값은 월별 값의 단순 평균이다. 달마다 표본 수가 달라도 같은 무게로 평균했다.",
+                "카드 이용금액과는 출처와 집계 방식이 달라 서로 비교하거나 더하지 않는다.",
+            ),
+            note="내국인 관광객 1인당 지출(원). 항목(item: 숙박비, 식음료비, 차량임대비 등)별. 필터 없이 부르면 항목을 더한 1인당 전체 지출. 여러 달은 평균한다",
         ),
         Metric(
             "restaurant_open", "음식점 인허가 건수", "곳", "restaurant_monthly", "dtYearMonth", "cnt", "restaurants",

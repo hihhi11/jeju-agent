@@ -94,6 +94,10 @@ COLUMN_LABELS = {
     "eventName": "행사",
     "durationDays": "일수",
     "isLongRunning": "90일 넘게 열림",
+    "item": "지출 항목",
+    "passengerType": "승객 구분",
+    "ship": "선박",
+    "carType": "차종",
 }
 EVIDENCE_LABELS = {
     "label": "지표",
@@ -213,8 +217,9 @@ def build_figure(result: ToolResult) -> go.Figure | None:
     if len(groups) > MAX_SERIES:
         return None
     unit = _unit(result, y)
-    # 원 단위 금액은 자릿수가 많아 축에서 읽기 어렵다. 표에는 원 단위를 그대로 둔다
-    scale = 100_000_000 if unit == "원" else 1
+    # 원 단위 금액은 자릿수가 많아 축에서 읽기 어렵다. 표에는 원 단위를 그대로 둔다. 1인당 지출처럼 작은 금액은 원 그대로 쓴다
+    largest = max((abs(r[y]) for r in rows if r.get(y) is not None), default=0)
+    scale = 100_000_000 if unit == "원" and largest >= 100_000_000 else 1
     unit = "억 원" if scale > 1 else unit
     # 이름 순위는 눕혀서 그린다. 시간과 구간은 왼쪽에서 오른쪽으로 읽는다
     horizontal = spec["type"] == "bar" and x not in TIME_AXES

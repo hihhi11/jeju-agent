@@ -380,6 +380,96 @@ def jeju_events(srcs: list[Path], out: Path) -> None:
     _save_df(frame[~no_date & ~reversed_], out)
 
 
+def tourist_spending_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"기준연월": str})
+    items = [c for c in df.columns if c not in ("기준연월", "전체")]
+    # 항목마다 원 단위로 반올림해 합계가 1원쯤 어긋나는 달이 있다
+    diff = (df[items].sum(axis=1) - df["전체"]).abs()
+    if diff.max() > 2:
+        raise ValueError(f"{srcs[0].name}: 항목 합계가 전체와 다릅니다 (최대 {diff.max()}원)")
+    # 전체는 항목의 합이라 빼고, 필요하면 도구가 항목을 더한다
+    frame = df.melt(id_vars="기준연월", value_vars=items, var_name="item", value_name="amount")
+    frame.insert(0, "dtYearMonth", _month_start(frame.pop("기준연월"), "%Y-%m"))
+    print(f"  항목 {len(items)}개의 합과 전체의 차이: 최대 {diff.max()}원, 다른 달 {(diff > 0).sum()}개")
+    _save_df(frame, out)
+
+
+# 제주관광빅데이터플랫폼(data.ijto.or.kr) 에서 받은 파일. 내려받은 날(2026-11-06) 기준으로 진행 중인 달은 뺀다
+PLATFORM_LAST_MONTH = date(2026, 10, 1)
+SIGUNGU_CODE = {"3901": "제주시", "3902": "서귀포시", "50110": "제주시", "50130": "서귀포시"}
+
+
+def arrivals_long_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_excel(srcs[0], sheet_name="분석용 데이터")
+    wide = df.pivot_table(index=["년도", "월"], columns="구분", values="방문객수", aggfunc="sum").reset_index()
+    if not (wide["전체"] == wide["내국인"] + wide["외국인"]).all():
+        raise ValueError(f"{srcs[0].name}: 전체가 내국인+외국인과 다른 달이 있습니다")
+    frame = pd.DataFrame(
+        {
+            "dtYearMonth": pd.to_datetime(dict(year=wide["년도"], month=wide["월"], day=1)).dt.date,
+            "domesticCnt": wide["내국인"].astype(int),
+            "foreignCnt": wide["외국인"].astype(int),
+        }
+    )
+    _save_df(frame.sort_values("dtYearMonth"), out)
+
+
+def cruise_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"입항년월(YYYYMM)": str})
+    if not (df["총승객수"] == df["한국인승객수"] + df["외국인승객수"]).all():
+        raise ValueError(f"{srcs[0].name}: 총승객수가 한국인+외국인과 다른 행이 있습니다")
+    month = _month_start(df["입항년월(YYYYMM)"], "%Y%m")
+    parts = [pd.DataFrame({"dtYearMonth": month, "ship": df["선박명"], "passengerType": kind, "passengerCnt": df[col]}) for kind, col in (("한국인", "한국인승객수"), ("외국인", "외국인승객수"))]
+    frame = pd.concat(parts, ignore_index=True)
+    late = frame["dtYearMonth"] > PLATFORM_LAST_MONTH
+    print(f"  진행 중인 달(2026-11 이후) {late.sum() // 2}행은 뺀다, 승객 0명인 입항 {int((df['총승객수'] == 0).sum())}행")
+    _save_df(frame[~late], out)
+
+
+def rental_car_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"기준연월(YYYYMM)": str})
+    # 원본 2개월(2023-10 1시간, 2024-09 60시간)은 총 대여 시간이 승용+승합보다 작다. 총계는 원본 값을 둔다
+    gap = df["승용차 대여 시간"] + df["승합차 대여 시간"] - df["총 대여 시간"]
+    if gap.abs().max() > 100:
+        raise ValueError(f"{srcs[0].name}: 총 대여 시간이 승용+승합과 크게 다른 달이 있습니다 (최대 {gap.abs().max()}시간)")
+    print(f"  총 대여 시간과 승용+승합이 다른 달 {(gap != 0).sum()}개 (최대 {gap.abs().max()}시간)")
+    frame = pd.DataFrame(
+        {
+            "dtYearMonth": _month_start(df["기준연월(YYYYMM)"], "%Y%m"),
+            "fleetCnt": df["등록대수"],
+            "totalRentHours": df["총 대여 시간"],
+            "carRentHours": df["승용차 대여 시간"],
+            "vanRentHours": df["승합차 대여 시간"],
+            "utilizationPct": df["가동률(%)"],
+        }
+    )
+    _save_df(frame.sort_values("dtYearMonth"), out)
+
+
+def vehicle_arrivals_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"주행연월(YYYYMM)": str, "읍면동코드": str})
+    frame = pd.DataFrame(
+        {
+            "dtYearMonth": _month_start(df["주행연월(YYYYMM)"], "%Y%m"),
+            "sigungu": df["읍면동코드"].str[:4].map(SIGUNGU_CODE),
+            "area": df["읍면동명"],
+            "arrivalCnt": df["도착건수"],
+        }
+    )
+    if frame["sigungu"].isna().any():
+        raise ValueError(f"{srcs[0].name}: 시를 정하지 못한 읍면동 코드가 있습니다")
+    _save_df(frame.sort_values(["dtYearMonth", "area"]), out)
+
+
+def area_visitors_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"기준연월": str, "읍면동코드": str})
+    if not (df["총 방문객수 (내국인+외국인)"] == df["내국인 방문객수"] + df["외국인 방문객수"]).all():
+        raise ValueError(f"{srcs[0].name}: 총 방문객수가 내국인+외국인과 다른 행이 있습니다")
+    month = _month_start(df["기준연월"], "%Y%m")
+    parts = [pd.DataFrame({"dtYearMonth": month, "sigungu": df["시군구명"], "area": df["읍면동명"], "visitorType": kind, "visitorCnt": df[col]}) for kind, col in (("내국인", "내국인 방문객수"), ("외국인", "외국인 방문객수"))]
+    _save_df(pd.concat(parts, ignore_index=True).sort_values(["dtYearMonth", "area", "visitorType"]), out)
+
+
 @dataclass(frozen=True)
 class Dataset:
     desc: str
@@ -447,6 +537,36 @@ DATASETS = {
         "제주 주요 행사 (이름·기간)",
         ("제주특별자치도주요행사정보.csv",),
         jeju_events,
+    ),
+    "tourist_spending_monthly": Dataset(
+        "제주 방문 내국인 관광객 1인당 지출 경비 (월·항목)",
+        ("제주관광공사_제주방문관광객 실태조사 내국인 관광객 1인당 지출 경비 통계_20260401.csv",),
+        tourist_spending_monthly,
+    ),
+    "arrivals_long_monthly": Dataset(
+        "월별 입도 관광객 2001~ (내국인·외국인, 제주관광빅데이터플랫폼)",
+        ("입도관광객 전체_2026년08월 기준.xlsx",),
+        arrivals_long_monthly,
+    ),
+    "cruise_monthly": Dataset(
+        "월별 크루즈 입도 (선박별 한국인·외국인 승객, 제주관광빅데이터플랫폼)",
+        ("월별 크루즈 입도 통계_2024-01~2026-11.csv",),
+        cruise_monthly,
+    ),
+    "rental_car_monthly": Dataset(
+        "렌터카 운영 현황 (등록대수, 대여 시간, 가동률, 제주관광빅데이터플랫폼)",
+        ("렌터카 운영 현황_2023-01~2025-10.csv",),
+        rental_car_monthly,
+    ),
+    "vehicle_arrivals_monthly": Dataset(
+        "월별 읍면동 차량 도착 건수 (티맵, 제주관광빅데이터플랫폼)",
+        ("월별 읍면동 차량 도착_2021-01~2026-10.csv",),
+        vehicle_arrivals_monthly,
+    ),
+    "area_visitors_monthly": Dataset(
+        "월별 읍면동 방문객 (SKT, 내국인·외국인, 제주관광빅데이터플랫폼)",
+        ("SKT 읍면동별 유동인구 (통합)_2019-01~2026-08.csv",),
+        area_visitors_monthly,
     ),
     "bus_hourly": Dataset(
         "일별 시간대별 버스 승차 인원",

@@ -64,9 +64,14 @@ def _total(metric: Metric, values: pd.Series) -> float:
     return round(values.mean(), 1) if metric.agg == "mean" else values.sum()
 
 
+def _uses_points(metric: Metric) -> bool:
+    """지수와 비율(%)은 % 증감보다 포인트 차이로 말한다. 등록대수나 1인당 금액 같은 평균값은 아니다."""
+    return metric.agg == "mean" and metric.unit in ("지수", "%")
+
+
 def _points(metric: Metric, new: float | None, base: float | None) -> dict:
     """지수는 % 보다 포인트 차이로 말한다."""
-    if metric.agg != "mean" or new is None or base is None:
+    if not _uses_points(metric) or new is None or base is None:
         return {}
     return {"changePoints": round(new - base, 1)}
 
@@ -414,7 +419,7 @@ def _trend_rows(m: Metric, df: pd.DataFrame, grain: str, group_by: str | None) -
             before = (r["month"] - 12, *[r[k] for k in group_cols])
             base = lookup.get(before)
             row = {"period": month_text(r["month"]), **{k: r[k] for k in group_cols}, "value": r["value"], "isComplete": bool(r["ok"]), "yoyPct": pct_change(r["value"], base) if base else None}
-            if m.agg == "mean":
+            if _uses_points(m):
                 row["yoyPoints"] = round(r["value"] - base, 1) if base else None
             if has_spots:
                 row["spotCount"] = int(r["spotCount"])
@@ -437,7 +442,7 @@ def _trend_rows(m: Metric, df: pd.DataFrame, grain: str, group_by: str | None) -
         same_spots = not has_spots or spot_sets.get(key) == spot_sets.get((key[0] - 1, *key[1:]))
         comparable = prior is not None and prior["isComplete"] and r["isComplete"] and same_spots
         row = {"period": str(r["year"]), **{k: r[k] for k in group_cols}, "value": r["value"], "months": int(r["months"]), "isComplete": bool(r["isComplete"]), "yoyPct": pct_change(r["value"], prior["value"]) if comparable else None}
-        if m.agg == "mean":
+        if _uses_points(m):
             row["yoyPoints"] = round(r["value"] - prior["value"], 1) if comparable else None
         if has_spots:
             row["spotCount"] = len(spot_sets.get(key, ()))
@@ -635,14 +640,14 @@ def compare_periods(metric: str, period_a_start: str, period_a_end: str, period_
         if any(r["isSmallBase"] for r in rows):
             limits.append("isSmallBase 인 곳은 기준 값이 작아 비율이 크게 나온다. 실제 증가인지 집계 방식 변화인지 확인되지 않았다.")
     chart = {"type": "bar", "x": group, "y": "ratioPct", "series": None, "title": f"{m.label} 기준 기간 대비(%)"} if group else None
-    if group and m.agg == "mean":
+    if group and _uses_points(m):
         chart = {"type": "bar", "x": group, "y": "changePoints", "series": None, "title": f"{m.label} 기준 기간 대비 변화(포인트)"}
     return ToolResult(
         "ok",
         rows=rows,
         summary=summary,
         chart=chart,
-        evidence=_evidence(m, period_text, len(rows), f"기준 기간 {_total_word(m)} 대비 비교 기간 {_total_word(m)}의 비율" + ("과 포인트 차이" if m.agg == "mean" else ""), **_scope(m, clean)),
+        evidence=_evidence(m, period_text, len(rows), f"기준 기간 {_total_word(m)} 대비 비교 기간 {_total_word(m)}의 비율" + ("과 포인트 차이" if _uses_points(m) else ""), **_scope(m, clean)),
         limits=limits,
     )
 
@@ -722,7 +727,7 @@ def get_seasonality(metric: str, filters: dict | None = None, start_year: int | 
         rows=rows,
         summary=summary,
         chart={"type": "line", "x": "month", "y": "averageValue", "series": None, "title": f"{m.label} 월별 패턴"},
-        evidence=_evidence(m, f"{years[0]}~{years[-1]}", len(rows), f"달력 월별 {'값' if m.agg == 'mean' else '합계'}와 같은 대상의 연평균", **_scope(m, clean)),
+        evidence=_evidence(m, f"{years[0]}~{years[-1]}", len(rows), f"달력 월별 {'값과' if m.agg == 'mean' else '합계와'} 같은 대상의 연평균", **_scope(m, clean)),
         limits=limits,
     )
 

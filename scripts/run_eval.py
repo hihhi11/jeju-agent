@@ -25,15 +25,26 @@ from agent.llm import LLMError, current_model
 
 
 def _with_month_format(text: str) -> str:
-    """'2021년 8월' 도 '2021-08' 과 같게 본다. 답변에 두 표기가 모두 남게 덧붙인다."""
-    return text + " " + " ".join(f"{y}-{int(m):02d}" for y, m in re.findall(r"(\d{4})년 ?(\d{1,2})월", text))
+    """'2021년 8월' 도 '2021-08' 과, '2025년 10월 19일' 도 '2025-10-19' 와 같게 본다. 답변에 두 표기가 모두 남게 덧붙인다."""
+    months = [f"{y}-{int(m):02d}" for y, m in re.findall(r"(\d{4})년 ?(\d{1,2})월", text)]
+    days = [f"{y}-{int(m):02d}-{int(d):02d}" for y, m, d in re.findall(r"(\d{4})년 ?(\d{1,2})월 ?(\d{1,2})일", text)]
+    return text + " " + " ".join(months + days)
+
+
+def _label(item: str | list[str]) -> str:
+    return item if isinstance(item, str) else "/".join(item)
+
+
+def _found(item: str | list[str], pool) -> bool:
+    """항목은 낱말 하나 또는 같은 뜻의 낱말 목록이다. 목록이면 하나만 있어도 된다."""
+    return any(word in pool for word in ([item] if isinstance(item, str) else item))
 
 
 def score(question: dict, answer) -> dict:
     used = [c["name"] for c in answer.tool_calls]
-    missing_tools = [t for t in question["expectedTools"] if t not in used]
+    missing_tools = [_label(t) for t in question["expectedTools"] if not _found(t, used)]
     text = _with_month_format(answer.text)
-    missing_mentions = [m for m in question["mustMention"] if m not in text]
+    missing_mentions = [_label(m) for m in question["mustMention"] if not _found(m, text)]
     passed = answer.status == "ok" and not missing_tools and not missing_mentions and not answer.unverified
     return {
         "id": question["id"],

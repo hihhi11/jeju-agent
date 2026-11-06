@@ -100,7 +100,8 @@ class ClaudeConversation:
                 fallbacks="default",
                 cache_control={"type": "ephemeral"},
                 output_config={"effort": self.effort},
-                system=self.system,
+                # 질문이 바뀌어도 도구와 시스템 프롬프트는 같아 여기에 저장 지점을 따로 둔다. 대화 끝은 위의 자동 캐시가 맡는다
+                system=[{"type": "text", "text": self.system, "cache_control": {"type": "ephemeral"}}],
                 tools=self.tools,
                 messages=self.messages,
             )

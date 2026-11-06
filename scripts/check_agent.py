@@ -57,10 +57,10 @@ def check_tools() -> None:
     check("Q02 반출 불가", describe_data("1-01").summary["exportable"], False)
     check("허브 목록은 LLM에 보내지 않음", "hubMatches" in q02.to_llm_json(), False)
 
-    check("자료 찾기: 없는 값을 다른 자료로 답하지 않음", (find_data("렌터카 이용 비율").rows, find_data("렌터카 이용 비율").summary["tokensNotFound"]), ([], ["렌터카"]))
+    check("자료 찾기: 없는 값을 다른 자료로 답하지 않음", (find_data("택시 이용 비율").rows, find_data("택시 이용 비율").summary["tokensNotFound"]), ([], ["택시"]))
     check("자료 찾기: 흔한 말만 있으면 전체에서 찾음", len(find_data("관광").rows) > 0, True)
     check("자료 찾기: 흔한 말은 빼고 찾음", all("입도" not in r["title"] for r in find_data("관광객 버스").rows), True)
-    check("자료 찾기: 일부 낱말이 없으면 알림", "크루즈" in find_data("버스 크루즈").message, True)
+    check("자료 찾기: 일부 낱말이 없으면 알림", "택시" in find_data("버스 택시").message, True)
 
     # 기대값은 도구와 별개로 SQL로 계산한다
     expected = query(
@@ -116,6 +116,21 @@ def check_tools() -> None:
     check("행사: 이름으로 찾기", [r["startDate"] for r in list_events(keyword="들불축제").rows], ["2023-03-09", "2025-03-14"])
     check("행사: 기간 밖", list_events("2026-05").status, "out_of_range")
     check("행사: 조건 없으면 입력 오류", list_events().status, "invalid_request")
+    q23 = rank_values("tourist_spending", "2025", "2025", top_n=3)
+    check("Q23 1인당 지출 항목 순위", [(r["item"], r["value"]) for r in rows_of(q23)], [("식음료비", 188898), ("숙박비", 134158), ("항공 및 선박료", 130861)])
+    check("Q23 1인당 전체 지출은 항목 합의 연평균", rows_of(get_trend("tourist_spending"))[0]["value"], 635950)
+    check("1인당 지출: 하루 기준이 아니라고 알림", any("하루 기준 값은 없다" in t for t in q23.limits), True)
+    check("1인당 지출: 2024년과 비교 안 함", compare_periods("tourist_spending", "2024", "2024", "2025", "2025").status, "not_comparable")
+    check("1인당 지출: 작은 금액 차트는 원 그대로", build_figure(q23).layout.xaxis.ticksuffix, "원")
+    q24 = rank_values("area_visitors", "2025", "2025", top_n=3)
+    check("Q24 읍면동 방문객 순위", [(r["area"], r["value"]) for r in rows_of(q24)], [("용담2동", 16314917), ("애월읍", 11171339), ("안덕면", 9114131)])
+    check("Q24 실제 사람 수가 아니라고 알림", any("실제 사람 수로 말하지 않는다" in t for t in q24.limits), True)
+    check("Q25 크루즈 연도별", [(r["period"], r["value"], r["isComplete"]) for r in rows_of(get_trend("cruise_passengers"))], [("2024", 641232, True), ("2025", 756031, True), ("2026", 630861, False)])
+    check("차량 도착: 2026-01 집계 변경을 넘는 비교 거부", compare_periods("vehicle_arrivals", "2025-01", "2025-06", "2026-01", "2026-06").status, "not_comparable")
+    check("차량 도착 순위 1위", rows_of(rank_values("vehicle_arrivals", "2025", "2025", top_n=1))[0]["area"], "애월읍")
+    gauge = get_trend("rental_utilization")
+    check("렌터카 가동률은 평균과 포인트", [(r["period"], r["value"], r.get("yoyPoints")) for r in rows_of(gauge)][:2], [("2023", 71.7, None), ("2024", 71.9, 0.2)])
+    check("렌터카 등록대수에는 포인트를 붙이지 않음", "yoyPoints" in rows_of(get_trend("rental_fleet"))[1], False)
     check("Q19 낱말이 다른 자료에 나뉘면 센터 전용", (find_data("읍면동 카드").status, find_data("카페 창업").status), ("center_only", "ok"))
 
     q03 = rank_values("spot_visitors", "2024", "2024", top_n=5)
@@ -134,7 +149,8 @@ def check_tools() -> None:
     q05 = rows_of(get_trend("arrivals", start="2024", end="2024"))[0]
     check("Q05 합계", (q05["value"], q05["breakdown"]["내국인"], q05["breakdown"]["외국인"]), (13767350, 11861654, 1905696))
 
-    check("기간이 잘리면 대체 지표를 알림", get_trend("arrivals", start="2019", end="2024").alternatives[0]["metric"], "air_passengers")
+    check("기간이 잘리면 대체 지표를 알림", get_trend("arrivals", start="1999", end="2002").alternatives[0]["metric"], "air_passengers")
+    check("입도객은 2001년부터", get_trend("arrivals").summary["availablePeriod"], "2001-01~2026-08")
 
     q06 = compare_periods("spot_visitors", "2019", "2019", "2024", "2024")
     check("Q06 곳 수", (q06.summary["comparableCount"], q06.summary["reachedBaseCount"]), (27, 6))
@@ -142,7 +158,8 @@ def check_tools() -> None:
     check("Q06 만장굴 제외", "만장굴관광지" in [e["name"] for e in q06.summary["excluded"]], True)
 
     q07 = compare_periods("arrivals", "2019", "2019", "2024", "2024")
-    check("Q07 입도객 비교 불가", (q07.status, q07.alternatives[0]["metric"]), ("not_comparable", "air_passengers"))
+    check("Q07 입도객 2019 대비", (q07.status, q07.summary["valueA"], q07.summary["valueB"], q07.summary["ratioPct"]), ("ok", 15286136, 13767350, 90.1))
+    check("사드: 외국인 입도객 2016 대비 2017", compare_periods("arrivals", "2016", "2016", "2017", "2017", {"visitorType": "외국인"}).summary["changePct"], -65.8)
     q07b = compare_periods("air_passengers", "2019", "2019", "2024", "2024", {"direction": "도착"})
     check("Q07 항공 지표", (q07b.summary["valueA"], q07b.summary["valueB"], q07b.summary["ratioPct"]), (15657540, 14798780, 94.5))
     check("항공 지표는 방향 필수", compare_periods("air_passengers", "2019", "2019", "2024", "2024").status, "needs_clarification")
@@ -200,7 +217,7 @@ def check_verify() -> None:
     check("지어낸 숫자", unverified_numbers("입도객은 23,723,308명입니다.", [result]), ["2.37233e+07명"])
     check("계산한 비율", unverified_numbers("내국인이 86.2%입니다.", [result]), ["86.2%"])
     check("순서·날짜는 대조 안 함", unverified_numbers("2024-08부터 3곳, 5월, 2024년에", [result]), [])
-    check("지어낸 기간", unverified_numbers("자료는 2010년부터 2023년까지입니다.", [result]), ["2010년"])
+    check("지어낸 기간", unverified_numbers("자료는 2010년부터 2024년까지입니다.", [result]), ["2010년"])
     check("질문에 나온 연도", unverified_numbers("2019년 자료는 없습니다.", [result], "2019년 입도객?"), [])
 
 
@@ -213,7 +230,7 @@ def check_expected_answers() -> None:
         "Q04": [get_trend("visit_purpose", {"purpose": "레저스포츠"})],
         "Q05": [get_trend("arrivals", start="2024", end="2024")],
         "Q06": [compare_periods("spot_visitors", "2019", "2019", "2024", "2024")],
-        "Q07": [compare_periods("arrivals", "2019", "2019", "2024", "2024"), compare_periods("air_passengers", "2019", "2019", "2024", "2024", {"direction": "도착"})],
+        "Q07": [compare_periods("arrivals", "2019", "2019", "2024", "2024")],
         "Q08": [get_seasonality("spot_visitors", {"sigungu": "서귀포시"})],
         "Q09": [analyze_weather_effect()],
         "Q10": [resolve_spot("성산"), get_trend("spot_visitors", {"spot": "성산일출봉"}, "2025", "2025")],
@@ -229,6 +246,9 @@ def check_expected_answers() -> None:
         "Q20": [get_trend("restaurant_open", {"foodGroup": "카페", "area": "애월"}, start="2019")],
         "Q21": [compare_periods("sbiz_bsi", "2019", "2019", "2024", "2024")],
         "Q22": [list_events("2024-10", "2024-10")],
+        "Q23": [rank_values("tourist_spending", "2025", "2025", top_n=5), get_trend("tourist_spending")],
+        "Q24": [rank_values("area_visitors", "2025", "2025", top_n=5), rank_values("area_visitors", "2025", "2025", {"visitorType": "외국인"}, top_n=5)],
+        "Q25": [get_trend("cruise_passengers"), get_trend("cruise_passengers", {"passengerType": "외국인"})],
     }
     questions = json.loads((PROJECT_ROOT / "reference" / "eval_questions.json").read_text(encoding="utf-8"))["questions"]
     for q in questions:
@@ -344,6 +364,7 @@ def check_claude_request() -> None:
         first, second = _FakeClaude.requests[0], _FakeClaude.requests[1]
         check("Claude: 모델과 대체 설정", (first["body"]["model"], first["body"]["fallbacks"], first["beta"]), ("claude-opus-5-5", "default", "server-side-fallback-2026-07-01"))
         check("Claude: 캐시와 노력 수준", (first["body"]["cache_control"], first["body"]["output_config"]), ({"type": "ephemeral"}, {"effort": "medium"}))
+        check("Claude: 질문 사이에 공유할 시스템 프롬프트 저장 지점", first["body"]["system"][-1]["cache_control"], {"type": "ephemeral"})
         check("Claude: 도구 수", len(first["body"]["tools"]), 10)
         check("Claude: 생각 블록을 그대로 돌려보냄", second["body"]["messages"][1]["content"][0]["signature"], "sig")
         check("Claude: 도구 결과", second["body"]["messages"][2]["content"][0]["tool_use_id"], "toolu_1")

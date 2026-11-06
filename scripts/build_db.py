@@ -140,7 +140,21 @@ def _load_local_business(con: duckdb.DuckDBPyConnection, src) -> None:
         WHERE d >= DATE '{RESTAURANT_START}' AND d < DATE '{RESTAURANT_END}'
         GROUP BY ALL
     """)
+    con.execute(f"CREATE TABLE tourist_spending_monthly AS SELECT * FROM {src('tourist_spending_monthly')}")
     con.execute(f"CREATE TABLE jeju_events AS SELECT *, datediff('day', startDate, endDate) + 1 AS durationDays FROM {src('jeju_events')}")
+
+
+def _load_platform(con: duckdb.DuckDBPyConnection, src) -> None:
+    """제주관광빅데이터플랫폼에서 받은 크루즈, 렌터카, 차량 도착, 읍면동 방문객."""
+    con.execute(f"CREATE TABLE cruise_monthly AS SELECT * FROM {src('cruise_monthly')}")
+    con.execute(f"CREATE TABLE rental_car_monthly AS SELECT * FROM {src('rental_car_monthly')}")
+    con.execute("""
+        CREATE VIEW rental_hours_monthly AS
+        SELECT dtYearMonth, '승용차' AS carType, carRentHours AS rentHours FROM rental_car_monthly
+        UNION ALL SELECT dtYearMonth, '승합차', vanRentHours FROM rental_car_monthly
+    """)
+    con.execute(f"CREATE TABLE vehicle_arrivals_monthly AS SELECT * FROM {src('vehicle_arrivals_monthly')}")
+    con.execute(f"CREATE TABLE area_visitors_monthly AS SELECT * FROM {src('area_visitors_monthly')}")
 
 
 def _load_foreign_arrivals(con: duckdb.DuckDBPyConnection, src) -> None:
@@ -161,7 +175,7 @@ def _load_foreign_arrivals(con: duckdb.DuckDBPyConnection, src) -> None:
         ORDER BY dtYearMonth, nationality
     """)
     con.execute("""
-        CREATE VIEW arrivals_monthly AS
+        CREATE VIEW arrivals_hub_monthly AS
         WITH domestic AS (
             SELECT dtYearMonth, sum(visitorCnt) AS domesticCnt
             FROM visit_purpose WHERE classType = '여행형태' GROUP BY dtYearMonth
@@ -170,6 +184,11 @@ def _load_foreign_arrivals(con: duckdb.DuckDBPyConnection, src) -> None:
         )
         SELECT dtYearMonth, domesticCnt, foreignCnt, domesticCnt + foreignCnt AS totalCnt
         FROM domestic JOIN foreigners USING (dtYearMonth)
+    """)
+    con.execute(f"""
+        CREATE TABLE arrivals_monthly AS
+        SELECT dtYearMonth, domesticCnt, foreignCnt, domesticCnt + foreignCnt AS totalCnt
+        FROM {src('arrivals_long_monthly')} ORDER BY dtYearMonth
     """)
 
 
@@ -620,6 +639,28 @@ def _check(con: duckdb.DuckDBPyConnection, src) -> None:
     same("음식점 폐업 건수", "SELECT sum(cnt) FROM restaurant_monthly WHERE eventType = '폐업'", f"SELECT count(*) FROM {restaurants} WHERE closeDate {window}")
     if one("SELECT count(*) FROM restaurants WHERE closeDate < licenseDate OR (status = '폐업') <> (closeDate IS NOT NULL)") > 1:
         raise ValueError("restaurants: 폐업 상태와 폐업일이 맞지 않는 행이 늘었습니다")
+    # 입도객: 허브로 만든 2021-08 이후 값과 플랫폼 값이 같아야 이어 붙인 자료로 쓸 수 있다
+    overlap, differ = con.execute("""
+        SELECT count(*), count(*) FILTER (WHERE h.domesticCnt <> a.domesticCnt OR h.foreignCnt <> a.foreignCnt)
+        FROM arrivals_hub_monthly h JOIN arrivals_monthly a USING (dtYearMonth)
+    """).fetchone()
+    if differ or overlap < one("SELECT count(*) FROM arrivals_hub_monthly"):
+        raise ValueError(f"입도객: 허브 값과 플랫폼 값이 다른 달 {differ}개, 겹치는 달 {overlap}개")
+    print(f"  입도객: 허브와 겹치는 {overlap}개월 값이 모두 같다")
+    same("입도객 달 수", "SELECT count(*) FROM arrivals_monthly", f"SELECT count(*) FROM {src('arrivals_long_monthly')}")
+    same("크루즈 승객 합계", "SELECT sum(passengerCnt) FROM cruise_monthly", f"SELECT sum(passengerCnt) FROM {src('cruise_monthly')}")
+    same("차량 도착 합계", "SELECT sum(arrivalCnt) FROM vehicle_arrivals_monthly", f"SELECT sum(arrivalCnt) FROM {src('vehicle_arrivals_monthly')}")
+    same("읍면동 방문객 합계", "SELECT sum(visitorCnt) FROM area_visitors_monthly", f"SELECT sum(visitorCnt) FROM {src('area_visitors_monthly')}")
+    for table in ("vehicle_arrivals_monthly", "area_visitors_monthly"):
+        short = con.execute(f"""
+            SELECT string_agg(strftime(m, '%Y-%m') || ' ' || n || '곳', ', ') FROM (
+                SELECT dtYearMonth AS m, count(DISTINCT area) AS n FROM {table} GROUP BY 1
+                HAVING count(DISTINCT area) < (SELECT count(DISTINCT area) FROM {table}))
+        """).fetchone()[0]
+        print(f"  {table}: 읍면동이 빠진 달 {short or '없음'}")
+    same("1인당 지출 행 수", "SELECT count(*) FROM tourist_spending_monthly", f"SELECT count(*) FROM {src('tourist_spending_monthly')}")
+    if one("SELECT count(*) FROM (SELECT 1 FROM tourist_spending_monthly GROUP BY dtYearMonth, item HAVING count(*) > 1)"):
+        raise ValueError("tourist_spending_monthly: 같은 달·항목의 행이 여럿입니다")
     same("행사 행 수", "SELECT count(*) FROM jeju_events", f"SELECT count(*) FROM {src('jeju_events')}")
     other = one("SELECT count(*) FROM restaurants WHERE foodGroup = '기타'")
     print(f"  음식점 묶음이 기타인 업소: {other:,}곳")
@@ -704,7 +745,8 @@ def main() -> int:
             ("기본 표", lambda: _load_base_tables(con, src)),
             ("외국인 입도객", lambda: _load_foreign_arrivals(con, src)),
             ("카드 이용", lambda: _load_card(con, src)),
-            ("소상공인 경기·음식점·행사", lambda: _load_local_business(con, src)),
+            ("소상공인 경기·음식점·행사·관광객 지출", lambda: _load_local_business(con, src)),
+            ("크루즈·렌터카·차량 도착·읍면동 방문객", lambda: _load_platform(con, src)),
             ("관광지 표기·시군", lambda: _load_spots(con)),
             ("날짜·기상", lambda: _load_calendar_and_weather(con, src)),
             ("기초지자체 방문자", lambda: _load_tour_local(con, src)),

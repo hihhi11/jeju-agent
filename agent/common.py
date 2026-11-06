@@ -20,7 +20,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # LLM에 보내는 행 수. 화면에는 전체를 보여 주고 숫자 대조도 전체로 한다
 LLM_MAX_ROWS = 60
 COUNT_KEYS = {"value", "valueA", "valueB", "recentValue", "priorValue", "latestYearValue"}
-DECIMAL_UNITS = {"지수"}
+DECIMAL_UNITS = {"지수", "%"}
 
 _con: duckdb.DuckDBPyConnection | None = None
 
