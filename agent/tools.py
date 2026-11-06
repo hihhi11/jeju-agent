@@ -288,7 +288,7 @@ def describe_data(data_id: str) -> ToolResult:
             f"'{info['title']}' 은 제주빅데이터센터 전용 명세입니다. 값이 없어 계산할 수 없고 항목만 안내할 수 있습니다.",
             rows=columns.to_dict("records"),
             summary={"title": info["title"], "category": info["category"], "provider": info["provider"], "exportable": bool(info["exportable"]), "description": info["description"]},
-            evidence={"table": "center_datasets, center_columns", "rowCount": len(columns), "method": "센터 명세 v12 조회"},
+            evidence={"table": "center_datasets, center_columns", "rowCount": len(columns), "method": "센터 명세 v13 조회"},
             limits=["명세만 있고 데이터 자체는 없다.", "명세에 제공 기간 항목이 없다. 등록일은 데이터 기간이 아니다."],
         )
     # LLM이 지표 ID를 넘겨도 찾을 수 있게 한다

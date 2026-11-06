@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
 REFERENCE_DIR = PROJECT_ROOT / "reference"
-CENTER_SPEC = PROJECT_ROOT / "데이터_센터_명세_v12_데이터명세서_kr.xlsx"
+CENTER_SPEC = PROJECT_ROOT / "데이터명세서_kr_v13.xlsx"
 # 노선 수가 앞뒤 14일 중앙값의 이 범위를 벗어나면 원본 일부 누락·중복으로 본다
 CARD_RATIO_LOW = 0.97
 CARD_RATIO_HIGH = 1.01
