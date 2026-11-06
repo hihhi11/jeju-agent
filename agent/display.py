@@ -84,6 +84,16 @@ COLUMN_LABELS = {
     "centerNo": "센터 번호",
     "exportable": "반출 가능",
     "provider": "제공처",
+    "region": "지역",
+    "outlook": "체감·전망",
+    "area": "읍면동",
+    "foodGroup": "업종 묶음",
+    "businessType": "음식점 구분",
+    "yoyPoints": "전년 대비(포인트)",
+    "changePoints": "변화(포인트)",
+    "eventName": "행사",
+    "durationDays": "일수",
+    "isLongRunning": "90일 넘게 열림",
 }
 EVIDENCE_LABELS = {
     "label": "지표",

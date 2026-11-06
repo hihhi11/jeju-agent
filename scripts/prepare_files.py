@@ -318,6 +318,68 @@ def card_time_monthly(srcs: list[Path], out: Path) -> None:
     _save_df(frame, out)
 
 
+BSI_REGIONS = ("서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주")
+
+
+def sbiz_bsi_monthly(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="cp949")
+    # 전국 값은 원본의 경기전반 열이다. 시도 열은 업종을 나누지 않은 지역 값이다
+    regions = {"전국": "경기전반", **{r: r for r in BSI_REGIONS}}
+    month = _month_start(df["연도"].astype(str) + df["월"].astype(str).str.zfill(2), "%Y%m")
+    parts = []
+    for region, prefix in regions.items():
+        for outlook in ("체감", "전망"):
+            parts.append(pd.DataFrame({"dtYearMonth": month, "region": region, "outlook": outlook, "bsi": df[f"{prefix}{outlook}"]}))
+    frame = pd.concat(parts, ignore_index=True)
+    blank = frame["bsi"].isna()
+    print(f"  빈 값 {blank.sum()}개는 뺀다 (제주 체감 {int((blank & (frame['region'] == '제주') & (frame['outlook'] == '체감')).sum())}개)")
+    _save_df(frame[~blank], out)
+
+
+def restaurants(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="cp949", dtype=str)
+    jibun = df["소재지전체주소"].fillna("").str.split()
+    road = df["도로명전체주소"].fillna("").str.split()
+    # 지번 주소가 없으면 도로명 주소의 읍면이나 괄호 안 동 이름을 쓴다
+    road_area = road.str[2].where(road.str[2].fillna("").str.endswith(("읍", "면")), df["도로명전체주소"].str.extract(r"\(([^,)]+)")[0])
+    frame = pd.DataFrame(
+        {
+            "province": jibun.str[0].where(jibun.str.len() > 0, road.str[0]),
+            "sigungu": jibun.str[1].where(jibun.str.len() > 0, road.str[1]),
+            "area": jibun.str[2].where(jibun.str.len() > 0, road_area),
+            "businessType": df["업종구분대분류"],
+            "category": df["업종구분소분류"],
+            "status": df["영업상태명"],
+            "licenseDate": pd.to_datetime(df["인허가일자"], format="%Y%m%d").dt.date,
+            # 원본의 폐업일자는 20200101.0 처럼 소수로 적혀 있다
+            "closeDate": pd.to_datetime(df["폐업일자"].str.removesuffix(".0"), format="%Y%m%d").dt.date,
+        }
+    )
+    outside = frame["province"] != "제주특별자치도"
+    print(f"  제주 밖 주소 {outside.sum()}행은 뺀다, 지역을 정하지 못한 행 {frame['area'].isna().sum()}행")
+    _save_df(frame[~outside].drop(columns="province"), out)
+
+
+def jeju_events(srcs: list[Path], out: Path) -> None:
+    df = pd.read_csv(srcs[0], encoding="cp949", dtype=str)
+    frame = pd.DataFrame(
+        {
+            "eventName": df["콘텐츠명"].str.strip(),
+            "startDate": pd.to_datetime(df["시작일"], errors="coerce").dt.date,
+            "endDate": pd.to_datetime(df["종료일"], errors="coerce").dt.date,
+            "startTime": df["시작시간"],
+            "endTime": df["종료시간"],
+            "fee": df["요금"],
+            "host": df["주관"],
+            "organizer": df["주최"],
+        }
+    )
+    no_date = frame["startDate"].isna() | frame["endDate"].isna()
+    reversed_ = ~no_date & (frame["endDate"] < frame["startDate"])
+    print(f"  날짜 없는 행 {no_date.sum()}행, 종료일이 시작일보다 이른 행 {reversed_.sum()}행은 뺀다")
+    _save_df(frame[~no_date & ~reversed_], out)
+
+
 @dataclass(frozen=True)
 class Dataset:
     desc: str
@@ -370,6 +432,21 @@ DATASETS = {
         "시간대별 카드 이용금액 (월·시간대·이용자 유형·연령)",
         ("시간대별카드이용금액현황.csv",),
         card_time_monthly,
+    ),
+    "sbiz_bsi_monthly": Dataset(
+        "소상공인 경기동향 BSI (월·지역·체감/전망)",
+        ("소상공인시장진흥공단_소상공인 경기동향(BSI) 현황_20250620.csv",),
+        sbiz_bsi_monthly,
+    ),
+    "restaurants": Dataset(
+        "제주 음식점 인허가·폐업 목록 (일반·휴게음식점)",
+        ("제주특별자치도음식점목록(통합).csv",),
+        restaurants,
+    ),
+    "jeju_events": Dataset(
+        "제주 주요 행사 (이름·기간)",
+        ("제주특별자치도주요행사정보.csv",),
+        jeju_events,
     ),
     "bus_hourly": Dataset(
         "일별 시간대별 버스 승차 인원",

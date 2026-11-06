@@ -1,4 +1,4 @@
-"""분석 도구 9개. LLM은 SQL을 쓰지 않고 이 함수와 조건만 고른다. 모든 수치는 여기서 계산한다."""
+"""분석 도구 10개. LLM은 SQL을 쓰지 않고 이 함수와 조건만 고른다. 모든 수치는 여기서 계산한다."""
 
 from __future__ import annotations
 
@@ -59,6 +59,25 @@ def _coverage_text(df: pd.DataFrame) -> str:
     return month_range_text(df["month"].min(), df["month"].max())
 
 
+def _total(metric: Metric, values: pd.Series) -> float:
+    """여러 달·대상을 하나로 합친 값. 지수는 더하지 않고 평균한다."""
+    return round(values.mean(), 1) if metric.agg == "mean" else values.sum()
+
+
+def _points(metric: Metric, new: float | None, base: float | None) -> dict:
+    """지수는 % 보다 포인트 차이로 말한다."""
+    if metric.agg != "mean" or new is None or base is None:
+        return {}
+    return {"changePoints": round(new - base, 1)}
+
+
+def _total_word(metric: Metric, particle: str = "") -> str:
+    word = "평균" if metric.agg == "mean" else "합계"
+    if particle == "로":
+        return word + ("으로" if metric.agg == "mean" else "로")
+    return word
+
+
 def _scope(metric: Metric, filters: dict) -> dict:
     return {"filters": filters, **({"visitorScope": "내국인+외국인 합산"} if metric.breakdown and "visitorType" not in filters else {})}
 
@@ -73,7 +92,7 @@ def _aggregate_years(metric: Metric, df: pd.DataFrame, group: str | None) -> pd.
         monthly["ok"] = monthly["value"] > 0
     else:
         monthly = frame.groupby(keys + ["month"], as_index=False).agg(value=("value", "sum"), ok=("ok", "min"))
-    out = monthly.groupby(keys, as_index=False).agg(value=("value", "sum"), months=("ok", "sum"))
+    out = monthly.groupby(keys, as_index=False).agg(value=("value", metric.agg), months=("ok", "sum"))
     out["isComplete"] = out["months"] == 12
     return out
 
@@ -99,12 +118,14 @@ def _recent_12(metric: Metric, df: pd.DataFrame) -> dict | None:
     if "spot" in df and len({sets[m] for m in last["month"]}) > 1:
         return None
     prior, recent = last.head(12), last.tail(12)
+    recent_value, prior_value = _total(metric, recent["value"]), _total(metric, prior["value"])
     return {
         "recentPeriod": month_range_text(recent["month"].iloc[0], recent["month"].iloc[-1]),
-        "recentValue": recent["value"].sum(),
+        "recentValue": recent_value,
         "priorPeriod": month_range_text(prior["month"].iloc[0], prior["month"].iloc[-1]),
-        "priorValue": prior["value"].sum(),
-        "changePct": pct_change(recent["value"].sum(), prior["value"].sum()),
+        "priorValue": prior_value,
+        "changePct": pct_change(recent_value, prior_value),
+        **_points(metric, recent_value, prior_value),
     }
 
 
@@ -131,7 +152,7 @@ def _out_of_range(metric: Metric, df: pd.DataFrame, filters: dict, start: pd.Per
     requested = month_range_text(start or end, end or start)
     rows = [{"period": str(year), "value": value, "isComplete": True}] if year else []
     if year and group:
-        by_group = df[df["month"].dt.year == year].groupby(group)["value"].sum()
+        by_group = df[df["month"].dt.year == year].groupby(group)["value"].agg(metric.agg)
         rows = [{"period": str(year), group: name, "value": v, "isComplete": True} for name, v in by_group.items()]
     limits = [f"{metric.label} 자료는 {coverage} 만 있다. 없는 기간의 값은 0이 아니라 자료 없음이다."] + catalog_limits(metric)
     message = f"요청 기간 {requested} 에는 자료가 없습니다. 제공 기간은 {coverage} 입니다."
@@ -142,7 +163,7 @@ def _out_of_range(metric: Metric, df: pd.DataFrame, filters: dict, start: pd.Per
         message,
         rows=rows,
         summary={"availablePeriod": coverage, "nearestYear": year},
-        evidence=_evidence(metric, coverage, len(rows), "요청 기간에 자료가 없어 가장 가까운 온전한 해의 합계", **_scope(metric, filters)),
+        evidence=_evidence(metric, coverage, len(rows), f"요청 기간에 자료가 없어 가장 가까운 온전한 해의 {_total_word(metric)}", **_scope(metric, filters)),
         limits=limits,
     )
 
@@ -200,6 +221,11 @@ def find_data(query_text: str = "") -> ToolResult:
 
     usable_text = " ".join(catalog.loc[catalog["status"] == "사용", "searchText"])
     only_in_center = [tok for tok in tokens if tok not in usable_text and any(tok in f"{c['title']} {c['description']}" for c in center_rows)]
+    # 낱말이 서로 다른 자료에 하나씩 있으면 함께 볼 수 없다 (예: 읍면동은 음식점, 카드는 카드 자료)
+    together = len(tokens) > 1 and not (catalog.loc[catalog["status"] == "사용", "score"] == len(tokens)).any()
+    combined = not only_in_center and together and any(all(tok in f"{c['category']} {c['title']} {c['description']}" for tok in tokens) for c in center_rows)
+    if combined:
+        only_in_center = list(tokens)
     status = "center_only" if only_in_center else "ok"
     center_text = " ".join(f"{c['title']} {c['description']}" for c in center_rows)
     not_found = [tok for tok in tokens if tok not in usable_text and tok not in center_text]
@@ -225,7 +251,9 @@ def find_data(query_text: str = "") -> ToolResult:
         summary["hubList"] = {"available": True, "matchCount": len(matched), "note": "허브 목록 항목은 사용자 화면에 표로 직접 표시된다. 이름을 추측해 말하지 말고 표를 보라고 안내한다. 목록에 있어도 이 에이전트로 분석할 수는 없다."}
 
     message = ""
-    if only_in_center:
+    if combined:
+        message = f"'{', '.join(tokens)}' 를 함께 담은 값은 분석 가능한 자료에 없고 제주빅데이터센터 전용 명세에만 있습니다. 낱말마다 다른 자료에서 찾은 rows 를 합쳐 답하지 마세요. 값을 계산할 수 없고 명세만 안내할 수 있습니다."
+    elif only_in_center:
         message = f"'{', '.join(only_in_center)}' 관련 값은 분석 가능한 자료에 없고 제주빅데이터센터 전용 명세에만 있습니다. 값을 계산할 수 없고 명세만 안내할 수 있습니다."
     elif not rows:
         message = "분석 가능한 자료에서 찾지 못했습니다."
@@ -361,7 +389,7 @@ def get_trend(metric: str, filters: dict | None = None, start: str | None = None
         rows=rows,
         summary=summary,
         chart=chart,
-        evidence=_evidence(m, used, len(rows), f"{'연' if grain == 'year' else '월'}별 합계", **_scope(m, clean)),
+        evidence=_evidence(m, used, len(rows), f"{'연' if grain == 'year' else '월'}별 {_total_word(m) if grain == 'year' else '값'}", **_scope(m, clean)),
         limits=limits,
         alternatives=list(m.alternatives) if cut_off else [],
     )
@@ -386,13 +414,17 @@ def _trend_rows(m: Metric, df: pd.DataFrame, grain: str, group_by: str | None) -
             before = (r["month"] - 12, *[r[k] for k in group_cols])
             base = lookup.get(before)
             row = {"period": month_text(r["month"]), **{k: r[k] for k in group_cols}, "value": r["value"], "isComplete": bool(r["ok"]), "yoyPct": pct_change(r["value"], base) if base else None}
+            if m.agg == "mean":
+                row["yoyPoints"] = round(r["value"] - base, 1) if base else None
             if has_spots:
                 row["spotCount"] = int(r["spotCount"])
             rows.append(row)
         return rows
 
     monthly["year"] = monthly["month"].dt.year
-    yearly = monthly.groupby(["year"] + group_cols, as_index=False).agg(value=("value", "sum"), months=("ok", "sum"))
+    yearly = monthly.groupby(["year"] + group_cols, as_index=False).agg(value=("value", m.agg), months=("ok", "sum"))
+    if m.agg == "mean":
+        yearly["value"] = yearly["value"].round(1)
     yearly["isComplete"] = yearly["months"] == 12
     spot_sets = {}
     if has_spots:
@@ -405,6 +437,8 @@ def _trend_rows(m: Metric, df: pd.DataFrame, grain: str, group_by: str | None) -
         same_spots = not has_spots or spot_sets.get(key) == spot_sets.get((key[0] - 1, *key[1:]))
         comparable = prior is not None and prior["isComplete"] and r["isComplete"] and same_spots
         row = {"period": str(r["year"]), **{k: r[k] for k in group_cols}, "value": r["value"], "months": int(r["months"]), "isComplete": bool(r["isComplete"]), "yoyPct": pct_change(r["value"], prior["value"]) if comparable else None}
+        if m.agg == "mean":
+            row["yoyPoints"] = round(r["value"] - prior["value"], 1) if comparable else None
         if has_spots:
             row["spotCount"] = len(spot_sets.get(key, ()))
         rows.append(row)
@@ -429,7 +463,8 @@ def rank_values(metric: str, start: str | None = None, end: str | None = None, f
     m = _metric_or_error(metric)
     if isinstance(m, ToolResult):
         return m
-    clean, problem = normalize_filters(m, filters, group_by)
+    # 지수는 지역마다 따로 보는 값이라 순위를 낼 때 기본 지역으로 좁히지 않는다
+    clean, problem = normalize_filters(m, filters, group_by or (m.default_group if m.agg == "mean" else None))
     if problem:
         return problem
     group = group_by or m.default_group
@@ -468,7 +503,9 @@ def rank_values(metric: str, start: str | None = None, end: str | None = None, f
         months, complete = _unit_complete(m, df, unit, month_count)
         kept = df[df[unit].isin(complete[complete].index)]
         excluded = [{"name": name, "completeMonths": int(months[name]), "requiredMonths": month_count} for name in complete[~complete].index]
-    grouped = kept.groupby(group, as_index=False).agg(value=("value", "sum"))
+    grouped = kept.groupby(group, as_index=False).agg(value=("value", m.agg))
+    if m.agg == "mean":
+        grouped["value"] = grouped["value"].round(1)
     grouped = grouped[grouped["value"] > 0].sort_values("value", ascending=ascending)
     label_map = _bus_labels(clean, p_start, p_end) if group == "name" and m.id == "bus_station" else {}
     rows = []
@@ -495,7 +532,7 @@ def rank_values(metric: str, start: str | None = None, end: str | None = None, f
         rows=rows,
         summary=summary,
         chart=chart,
-        evidence=_evidence(m, period, len(rows), f"{period} 합계로 순위 계산. 기간의 달이 모두 있는 대상만 포함", **_scope(m, clean)),
+        evidence=_evidence(m, period, len(rows), f"{period} {_total_word(m, '로')} 순위 계산. 기간의 달이 모두 있는 대상만 포함", **_scope(m, clean)),
         limits=limits,
     )
 
@@ -579,16 +616,18 @@ def compare_periods(metric: str, period_a_start: str, period_a_end: str, period_
     limits = catalog_limits(m)
     rows: list[dict] = []
     if group:
-        a = frame_a.groupby(group)["value"].sum()
-        b = frame_b.groupby(group)["value"].sum()
+        a = frame_a.groupby(group)["value"].agg(m.agg)
+        b = frame_b.groupby(group)["value"].agg(m.agg)
+        if m.agg == "mean":
+            a, b = a.round(1), b.round(1)
         median_base = a.median() if len(a) else 0
         for name in a.index:
-            rows.append({group: name, "valueA": a[name], "valueB": b.get(name, 0), "ratioPct": ratio_pct(b.get(name, 0), a[name]), "changePct": pct_change(b.get(name, 0), a[name]), "reachedBase": bool(b.get(name, 0) >= a[name]), "isSmallBase": bool(a[name] < median_base * SMALL_BASE_RATIO)})
+            rows.append({group: name, "valueA": a[name], "valueB": b.get(name, 0), "ratioPct": ratio_pct(b.get(name, 0), a[name]), "changePct": pct_change(b.get(name, 0), a[name]), "reachedBase": bool(b.get(name, 0) >= a[name]), "isSmallBase": bool(a[name] < median_base * SMALL_BASE_RATIO), **_points(m, b.get(name), a[name])})
         rows.sort(key=lambda r: -(r["ratioPct"] or 0))
-    total_a, total_b = frame_a["value"].sum(), frame_b["value"].sum()
+    total_a, total_b = _total(m, frame_a["value"]), _total(m, frame_b["value"])
     if not group and (not (month_is_complete(m, frame_a).all() and month_is_complete(m, frame_b).all()) or len(frame_a) != months_a or len(frame_b) != months_b):
         return _not_comparable(m, f"두 기간 중 일부 달의 자료가 온전하지 않아 비교할 수 없습니다. 제공 기간은 {coverage} 입니다.", clean, coverage)
-    summary: dict = {"valueA": total_a, "valueB": total_b, "ratioPct": ratio_pct(total_b, total_a), "changePct": pct_change(total_b, total_a), "availablePeriod": coverage}
+    summary: dict = {"valueA": total_a, "valueB": total_b, "ratioPct": ratio_pct(total_b, total_a), "changePct": pct_change(total_b, total_a), **_points(m, total_b, total_a), "availablePeriod": coverage}
     if group:
         recovered = [r[group] for r in rows if r["reachedBase"]]
         summary.update({"comparableCount": len(rows), "reachedBaseCount": len(recovered), "reachedBase": recovered, "excludedCount": len(excluded), "excluded": excluded})
@@ -596,12 +635,14 @@ def compare_periods(metric: str, period_a_start: str, period_a_end: str, period_
         if any(r["isSmallBase"] for r in rows):
             limits.append("isSmallBase 인 곳은 기준 값이 작아 비율이 크게 나온다. 실제 증가인지 집계 방식 변화인지 확인되지 않았다.")
     chart = {"type": "bar", "x": group, "y": "ratioPct", "series": None, "title": f"{m.label} 기준 기간 대비(%)"} if group else None
+    if group and m.agg == "mean":
+        chart = {"type": "bar", "x": group, "y": "changePoints", "series": None, "title": f"{m.label} 기준 기간 대비 변화(포인트)"}
     return ToolResult(
         "ok",
         rows=rows,
         summary=summary,
         chart=chart,
-        evidence=_evidence(m, period_text, len(rows), "기준 기간 합계 대비 비교 기간 합계의 비율", **_scope(m, clean)),
+        evidence=_evidence(m, period_text, len(rows), f"기준 기간 {_total_word(m)} 대비 비교 기간 {_total_word(m)}의 비율" + ("과 포인트 차이" if m.agg == "mean" else ""), **_scope(m, clean)),
         limits=limits,
     )
 
@@ -681,7 +722,7 @@ def get_seasonality(metric: str, filters: dict | None = None, start_year: int | 
         rows=rows,
         summary=summary,
         chart={"type": "line", "x": "month", "y": "averageValue", "series": None, "title": f"{m.label} 월별 패턴"},
-        evidence=_evidence(m, f"{years[0]}~{years[-1]}", len(rows), "달력 월별 합계와 같은 대상의 연평균", **_scope(m, clean)),
+        evidence=_evidence(m, f"{years[0]}~{years[-1]}", len(rows), f"달력 월별 {'값' if m.agg == 'mean' else '합계'}와 같은 대상의 연평균", **_scope(m, clean)),
         limits=limits,
     )
 
@@ -851,3 +892,58 @@ def _weather_on_date(date_text: str, all_days: pd.DataFrame, rows: list[dict], s
     else:
         message = f"{date_text} 은 비 영향 분석 자료({coverage}) 밖이고 다른 버스 자료와는 인원 정의가 달라 비교할 수 없습니다. 장기 구간별 값은 rows 에 있습니다."
     return ToolResult("not_comparable", message, rows=rows, summary=summary, chart=chart, evidence=evidence, limits=limits)
+
+
+# 이보다 길게 열리는 행사(상설 전시 등)는 그 기간의 행사 목록에서 따로 센다
+LONG_EVENT_DAYS = 90
+MAX_EVENT_ROWS = 30
+
+
+def list_events(start: str | None = None, end: str | None = None, keyword: str | None = None) -> ToolResult:
+    """행사 찾기. 기간과 겹치거나 이름에 낱말이 들어간 행사를 시작일 순으로 돌려준다. 행사 수 비교에는 쓰지 않는다."""
+    words = _tokens(keyword or "")
+    if not (start or end or words):
+        return invalid("start, end 또는 keyword 중 하나는 있어야 합니다.")
+    events = query("SELECT eventName, startDate, endDate, durationDays, startTime, endTime FROM jeju_events ORDER BY startDate, eventName")
+    events["startDate"] = pd.to_datetime(events["startDate"])
+    events["endDate"] = pd.to_datetime(events["endDate"])
+    first, last = events["startDate"].min(), events["endDate"].max()
+    coverage = f"{first:%Y-%m-%d}~{last:%Y-%m-%d}"
+    per_year = events.groupby(events["startDate"].dt.year).size()
+    busy, quiet = per_year.idxmax(), per_year[per_year.index >= 2017].idxmin()
+    limits = [
+        "장소 항목이 없어 어디서 열렸는지 알 수 없다.",
+        f"해마다 등록 건수가 크게 달라({quiet}년 {per_year[quiet]}건, {busy}년 {per_year[busy]}건) 행사 수가 늘거나 줄었다고 말하지 않는다. 목록에 없는 행사도 있을 수 있다.",
+        "행사와 방문객 변화가 함께 나타나도 행사 때문이라고 단정하지 않는다.",
+    ]
+    evidence = {"table": "jeju_events", "catalogId": "jeju_events", "label": "제주 주요 행사", "method": "기간과 하루라도 겹치거나 이름에 낱말이 모두 들어간 행사"}
+
+    p_start, p_end = _period_args(start, end)
+    frame = events
+    if p_start is not None or p_end is not None:
+        lo = (p_start or p_end).start_time
+        hi = (p_end or p_start).end_time
+        if hi < first or lo > last:
+            return ToolResult("out_of_range", f"요청 기간에 행사 자료가 없습니다. 제공 기간은 {coverage} 입니다.", summary={"availablePeriod": coverage}, evidence={**evidence, "period": coverage, "rowCount": 0}, limits=limits)
+        frame = frame[(frame["startDate"] <= hi) & (frame["endDate"] >= lo)]
+        evidence["period"] = month_range_text(p_start or p_end, p_end or p_start)
+    if words:
+        names = frame["eventName"].str.replace(" ", "")
+        frame = frame[names.map(lambda n: all(w.replace(" ", "") in n for w in words))]
+    if frame.empty:
+        return ToolResult("not_found", f"조건에 맞는 행사가 없습니다. 제공 기간은 {coverage} 입니다.", summary={"availablePeriod": coverage}, evidence={**evidence, "rowCount": 0}, limits=limits)
+
+    long_running = frame[frame["durationDays"] > LONG_EVENT_DAYS]
+    shown = pd.concat([frame[frame["durationDays"] <= LONG_EVENT_DAYS], long_running]).head(MAX_EVENT_ROWS)
+    rows = [
+        {"eventName": r["eventName"], "startDate": f"{r['startDate']:%Y-%m-%d}", "endDate": f"{r['endDate']:%Y-%m-%d}", "durationDays": int(r["durationDays"]), "isLongRunning": bool(r["durationDays"] > LONG_EVENT_DAYS)}
+        for r in shown.to_dict("records")
+    ]
+    summary = {"availablePeriod": coverage, "matchCount": len(frame), "shownCount": len(rows), "longRunningCount": len(long_running)}
+    if len(frame) > len(rows):
+        limits.insert(0, f"조건에 맞는 {len(frame)}건 중 {len(rows)}건만 보여 준다.")
+    if len(long_running):
+        limits.append(f"{LONG_EVENT_DAYS}일 넘게 열리는 행사 {len(long_running)}건(상설 전시 등)은 목록 뒤에 두었다.")
+    # 표에 일부만 보여 줘도 건수는 matchCount 다. 작은 모델이 보여 준 행 수로 어림하지 않게 문장으로 알린다
+    message = f"조건에 맞는 행사는 {len(frame)}건입니다." + (f" rows 에는 {len(rows)}건만 있습니다." if len(frame) > len(rows) else "")
+    return ToolResult("ok", message, rows=rows, summary=summary, evidence={**evidence, "rowCount": len(rows)}, limits=limits)

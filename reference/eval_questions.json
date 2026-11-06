@@ -453,6 +453,90 @@
           "expected": 0
         }
       ]
+    },
+    {
+      "id": "Q20",
+      "feature": "F2",
+      "persona": "소상공인",
+      "question": "요즘 애월에 카페가 많이 생기고 있어?",
+      "expectedTools": ["get_trend"],
+      "expectedAnswer": "최근 12개월(2024-09~2025-08) 애월읍 카페 인허가는 28곳으로 그 전 12개월 28곳과 같다. 연도별로는 2022년 47곳이 가장 많았고 2023년 26곳, 2024년 27곳이다. 인허가에는 영업자만 바뀐 경우가 섞였을 수 있다.",
+      "mustMention": ["28", "애월"],
+      "limits": ["인허가가 모두 새 가게는 아닐 수 있다", "2025년은 8월까지라 다른 해와 비교하지 않는다"],
+      "trap": "2025년 1~8월 21곳을 2024년 27곳과 비교해 줄었다고 하면 안 된다. 카페를 커피숍 한 가지로만 세면 값이 작아진다",
+      "checks": [
+        {
+          "label": "최근 12개월 인허가",
+          "sql": "SELECT count(*) FROM restaurants WHERE area = '애월읍' AND category IN ('커피숍', '까페', '다방', '전통찻집', '떡카페') AND licenseDate BETWEEN DATE '2024-09-01' AND DATE '2025-08-31'",
+          "expected": 28
+        },
+        {
+          "label": "그 전 12개월 인허가",
+          "sql": "SELECT count(*) FROM restaurants WHERE area = '애월읍' AND category IN ('커피숍', '까페', '다방', '전통찻집', '떡카페') AND licenseDate BETWEEN DATE '2023-09-01' AND DATE '2024-08-31'",
+          "expected": 28
+        },
+        {
+          "label": "가장 많았던 해",
+          "sql": "SELECT year(licenseDate) || ':' || count(*) FROM restaurants WHERE area = '애월읍' AND category IN ('커피숍', '까페', '다방', '전통찻집', '떡카페') AND licenseDate BETWEEN DATE '2010-01-01' AND DATE '2024-12-31' GROUP BY year(licenseDate) ORDER BY count(*) DESC LIMIT 1",
+          "expected": "2022:47"
+        }
+      ]
+    },
+    {
+      "id": "Q21",
+      "feature": "F3",
+      "persona": "소상공인",
+      "question": "제주 소상공인 체감경기가 코로나 전보다 나빠졌어?",
+      "expectedTools": ["compare_periods"],
+      "expectedAnswer": "제주 체감 경기지수는 2019년 평균 71.0에서 2024년 평균 55.6으로 15.4포인트 낮다. 매출액이 아니라 응답으로 만든 지수이고 관광 업종만 나눈 값이 아니다.",
+      "mustMention": ["71", "55.6", "15.4"],
+      "limits": ["매출액이 아니라 응답 지수다", "지역 값은 업종을 나누지 않았다"],
+      "trap": "지수 연간 값을 12개월 합으로 말하면 안 된다. 2025년은 5월까지라 2025년과 비교하면 안 된다",
+      "checks": [
+        {
+          "label": "2019년 평균",
+          "sql": "SELECT round(avg(bsi), 1) FROM sbiz_bsi_monthly WHERE region = '제주' AND outlook = '체감' AND year(dtYearMonth) = 2019",
+          "expected": 71.0
+        },
+        {
+          "label": "2024년 평균",
+          "sql": "SELECT round(avg(bsi), 1) FROM sbiz_bsi_monthly WHERE region = '제주' AND outlook = '체감' AND year(dtYearMonth) = 2024",
+          "expected": 55.6
+        },
+        {
+          "label": "두 해 모두 12개월",
+          "sql": "SELECT count(*) FROM sbiz_bsi_monthly WHERE region = '제주' AND outlook = '체감' AND year(dtYearMonth) IN (2019, 2024)",
+          "expected": 24
+        }
+      ]
+    },
+    {
+      "id": "Q22",
+      "feature": "행사",
+      "persona": "관광 담당 공무원",
+      "question": "2024년 10월에 제주에서 열린 축제가 뭐가 있어? 작년보다 행사가 많아졌어?",
+      "expectedTools": ["list_events"],
+      "expectedAnswer": "2024년 10월과 겹치는 행사는 33건이고 제63회 탐라문화제, 서귀포 칠십리축제, 2024 제주메밀축제 등이 있다. 해마다 등록 건수가 크게 달라 행사가 많아졌는지는 말할 수 없다.",
+      "mustMention": ["탐라문화제", "33"],
+      "limits": ["장소 항목이 없다", "등록 건수가 해마다 달라 행사 수를 비교하지 않는다"],
+      "trap": "2024년 153건과 2023년 88건을 비교해 행사가 늘었다고 하면 안 된다",
+      "checks": [
+        {
+          "label": "10월과 겹치는 행사 수",
+          "sql": "SELECT count(*) FROM jeju_events WHERE startDate <= DATE '2024-10-31' AND endDate >= DATE '2024-10-01'",
+          "expected": 33
+        },
+        {
+          "label": "탐라문화제가 10월에 있음",
+          "sql": "SELECT count(*) FROM jeju_events WHERE eventName LIKE '%탐라문화제%' AND startDate <= DATE '2024-10-31' AND endDate >= DATE '2024-10-01'",
+          "expected": 1
+        },
+        {
+          "label": "연도별 등록 건수가 크게 다름",
+          "sql": "SELECT count(*) FILTER (WHERE year(startDate) = 2020) || ':' || count(*) FILTER (WHERE year(startDate) = 2024) FROM jeju_events",
+          "expected": "10:153"
+        }
+      ]
     }
   ]
 }

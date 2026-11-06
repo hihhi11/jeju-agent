@@ -40,6 +40,10 @@ class Metric:
     breakdown: str | None = None
     # 이 지표로 비교할 수 없을 때 안내할 대체 지표
     alternatives: tuple[dict, ...] = ()
+    # 지수처럼 더할 수 없는 값은 여러 달을 평균한다 (mean)
+    agg: str = "sum"
+    # 건수라 0인 달도 자료가 있는 달이다. 행이 없는 달을 0으로 채운다
+    fill_zero: bool = False
     limits: tuple[str, ...] = ()
     note: str = ""
 
@@ -155,6 +159,49 @@ METRICS: dict[str, Metric] = {
             ) + ("시간대 구간의 정확한 시각은 자료에 없다.", "원본이 백만 원 단위라 업종별 합계보다 조금 작다."),
             note="시간대(오전, 점심, 오후, 저녁, 밤)별 소비. 기본은 관광객(추정)이고 spenderGroup 으로 제주도민, 법인을 고른다",
         ),
+        Metric(
+            "sbiz_bsi", "소상공인 경기지수(BSI)", "지수", "sbiz_bsi_monthly", "dtYearMonth", "bsi", "sbiz_bsi_monthly",
+            {"region": "region", "outlook": "outlook"},
+            default_group="region",
+            defaults={"region": "제주", "outlook": "체감"},
+            agg="mean",
+            limits=(
+                "매출액이나 관광객 수가 아니라 소상공인 응답으로 만든 지수다. 100보다 크면 좋아졌다(좋아질 것)는 응답이 많다는 뜻이다.",
+                "지역 값은 업종을 나누지 않아 관광 업종만 따로 볼 수 없다.",
+                "연·기간 값은 월 지수의 평균이다. 증감은 % 가 아니라 포인트 차이(changePoints, yoyPoints)로 말한다.",
+                "제주 체감 지수는 2014-10~2015-05와 2025-06, 전망 지수는 2014-11~2015-05가 비어 있다.",
+                "지역별 표본 수와 체감·전망의 정확한 정의는 파일에 없다.",
+            ),
+            note="소상공인 체감·전망 경기지수. 기본은 제주 체감이고 region(전국, 시도)과 outlook(체감/전망)을 고른다. 여러 달은 평균한다",
+        ),
+        Metric(
+            "restaurant_open", "음식점 인허가 건수", "곳", "restaurant_monthly", "dtYearMonth", "cnt", "restaurants",
+            {"sigungu": "sigungu", "area": "area", "foodGroup": "foodGroup", "category": "category", "businessType": "businessType"},
+            default_group="foodGroup",
+            where="eventType = '인허가'",
+            fill_zero=True,
+            limits=(
+                "새로 문을 연 가게만이 아니라 영업자가 바뀌어 새로 인허가를 받은 경우가 섞였을 수 있으나 확인하지 못했다.",
+                "2025-09-02 갱신 목록에서 센 값이다. 2010년부터 세고, 2025년은 1~8월만 있다.",
+                "관광객 수요와 도민 수요를 나눌 수 없다. 업종 묶음(foodGroup)은 이 프로젝트가 원본 소분류를 묶은 것이다.",
+                "영업 중인 업소 수는 이 지표로 계산하지 않는다. 2025-09-02 기준 영업 중 20,954곳, 폐업 30,156곳이다.",
+            ),
+            note="달별 음식점 인허가(개업) 건수. 업종 묶음(foodGroup: 카페, 한식, 주점 등), 읍면동(area), 시군 필터",
+        ),
+        Metric(
+            "restaurant_close", "음식점 폐업 건수", "곳", "restaurant_monthly", "dtYearMonth", "cnt", "restaurants",
+            {"sigungu": "sigungu", "area": "area", "foodGroup": "foodGroup", "category": "category", "businessType": "businessType"},
+            default_group="foodGroup",
+            where="eventType = '폐업'",
+            fill_zero=True,
+            limits=(
+                "폐업일 기준 건수다. 1994년 전 폐업 기록이 없어 오래전 폐업은 빠졌을 수 있어 2010년부터 센다. 2025년은 1~8월만 있다.",
+                "관광객 수요와 도민 수요를 나눌 수 없다. 업종 묶음(foodGroup)은 이 프로젝트가 원본 소분류를 묶은 것이다.",
+                "폐업 건수가 늘어도 그 업종 업소 수가 늘어서인지 장사가 어려워서인지 이 자료로 나눌 수 없다.",
+                "영업 중인 업소 수는 이 지표로 계산하지 않는다. 2025-09-02 기준 영업 중 20,954곳, 폐업 30,156곳이다.",
+            ),
+            note="달별 음식점 폐업 건수. 필터는 restaurant_open 과 같다",
+        ),
     ]
 }
 
@@ -202,6 +249,9 @@ def normalize_filters(metric: Metric, filters: dict | None, group_by: str | None
         clean["spot"] = spot
     if "sigungu" in clean:
         clean["sigungu"] = SIGUNGU_NAMES.get(clean["sigungu"], clean["sigungu"])
+    # "카페" 처럼 업종 묶음 이름을 원본 소분류로 넘기면 묶음으로 찾는다
+    if "category" in clean and "foodGroup" in metric.dims and "foodGroup" not in clean and clean["category"] in distinct_values(metric.id, "foodGroup"):
+        clean["foodGroup"] = clean.pop("category")
 
     for key, value in list(clean.items()):
         if key in ("spot", "name", "stationId"):
@@ -245,7 +295,28 @@ def fetch(metric: Metric, filters: dict, group_cols: tuple[str, ...] = ()) -> pd
         params,
     )
     df["month"] = pd.PeriodIndex(pd.to_datetime(df["month"]), freq="M")
-    return df
+    return _fill_months(metric, df, group_cols) if metric.fill_zero and not df.empty else df
+
+
+@lru_cache(maxsize=None)
+def coverage_months(metric_id: str) -> tuple[pd.Period, pd.Period]:
+    """필터와 관계없이 지표 전체의 첫 달과 마지막 달."""
+    m = METRICS[metric_id]
+    where = f"WHERE {m.where}" if m.where else ""
+    row = query(f"SELECT min({m.time_col}) AS s, max({m.time_col}) AS e FROM {m.source} {where}").iloc[0]
+    return pd.Period(row["s"], freq="M"), pd.Period(row["e"], freq="M")
+
+
+def _fill_months(metric: Metric, df: pd.DataFrame, group_cols: tuple[str, ...]) -> pd.DataFrame:
+    """건수 지표는 행이 없는 달이 0건이다. 제공 기간의 모든 달을 묶음마다 채운다."""
+    start, end = coverage_months(metric.id)
+    grid = pd.DataFrame({"month": pd.period_range(start, end, freq="M")})
+    if group_cols:
+        grid = grid.merge(df[list(group_cols)].drop_duplicates(), how="cross")
+    keys = ["month", *group_cols]
+    out = grid.merge(df, on=keys, how="left").fillna({"value": 0.0, "days": 0})
+    out["days"] = out["days"].astype(int)
+    return out
 
 
 def fetch_daily(metric: Metric, filters: dict) -> pd.DataFrame:
@@ -268,6 +339,8 @@ def fetch_daily(metric: Metric, filters: dict) -> pd.DataFrame:
 
 def month_is_complete(metric: Metric, frame: pd.DataFrame) -> pd.Series:
     """그 달 값을 온전한 값으로 쓸 수 있는지. 일별 자료는 그 달의 날이 다 있어야 한다."""
+    if metric.fill_zero:
+        return pd.Series(True, index=frame.index)
     if metric.partial_days_ok:
         return frame["value"] > 0
     if metric.daily:

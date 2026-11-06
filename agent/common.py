@@ -20,6 +20,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 # LLM에 보내는 행 수. 화면에는 전체를 보여 주고 숫자 대조도 전체로 한다
 LLM_MAX_ROWS = 60
 COUNT_KEYS = {"value", "valueA", "valueB", "recentValue", "priorValue", "latestYearValue"}
+DECIMAL_UNITS = {"지수"}
 
 _con: duckdb.DuckDBPyConnection | None = None
 
@@ -53,6 +54,9 @@ class ToolResult:
     display_only: dict = field(default_factory=dict)
 
     def __post_init__(self):
+        # 지수는 소수 첫째 자리까지 의미가 있어 반올림하지 않는다
+        if self.evidence.get("unit") in DECIMAL_UNITS:
+            return
         self.rows = _round_counts(self.rows)
         self.summary = _round_counts(self.summary)
 

@@ -25,7 +25,7 @@ from agent.display import DIMMED_OPACITY, build_figure, chart_note, clarificatio
 from agent.llm import ClaudeConversation, LLMError, OpenAICompatibleConversation, ToolCall, Turn
 from agent.registry import TOOL_DEFINITIONS, execute_tool
 from agent.common import query
-from agent.tools import analyze_weather_effect, compare_periods, describe_data, find_data, get_day_pattern, get_seasonality, get_trend, rank_values, resolve_spot
+from agent.tools import analyze_weather_effect, compare_periods, describe_data, find_data, get_day_pattern, get_seasonality, get_trend, list_events, rank_values, resolve_spot
 from agent.verify import unverified_numbers
 
 _failed = 0
@@ -93,6 +93,30 @@ def check_tools() -> None:
     check("카드: 회복률 계산", compare_periods("card_industry", "2019", "2019", "2024", "2024", {"industry": "호텔업"}).status, "ok")
     check("카드: 월별 패턴", get_seasonality("card_industry", {"industry": "호텔업"}).status, "ok")
     check("카드: 원 단위 차트는 억 원", (build_figure(q17).data[0].x[0], build_figure(q17).layout.xaxis.ticksuffix), (1229.6, "억 원"))
+
+    q20 = get_trend("restaurant_open", {"foodGroup": "카페", "area": "애월"}, start="2019")
+    check("Q20 애월읍 카페 최근 12개월", (q20.evidence["filters"]["area"], q20.summary["recent12Months"]["recentValue"], q20.summary["recent12Months"]["priorValue"]), ("애월읍", 28, 28))
+    check("Q20 2025년은 일부 달", {r["period"]: r["isComplete"] for r in q20.rows}["2025"], False)
+    check("음식점: 0건인 달도 자료가 있는 달", get_trend("restaurant_open", {"area": "우도면", "foodGroup": "치킨"}).rows[0]["months"], 12)
+    check("음식점: 소분류로 카페를 물어도 묶음으로 찾음", get_trend("restaurant_open", {"category": "카페"}).evidence["filters"], {"foodGroup": "카페"})
+    check("음식점: 영업 중 수를 limits 에 숫자로 알림", any("20,954곳" in t for t in q20.limits), True)
+    check("음식점: 폐업 순위", rows_of(rank_values("restaurant_close", "2024", "2024", group_by="area", top_n=1))[0], {"rank": 1, "area": "연동", "value": 130})
+    q21 = compare_periods("sbiz_bsi", "2019", "2019", "2024", "2024")
+    check("Q21 지수는 평균과 포인트 차이", (q21.summary["valueA"], q21.summary["valueB"], q21.summary["changePoints"]), (71.0, 55.6, -15.4))
+    check("BSI: 기본은 제주 체감", q21.evidence["filters"], {"region": "제주", "outlook": "체감"})
+    bsi_rank = rank_values("sbiz_bsi", "2024", "2024", top_n=20)
+    check("BSI: 순위는 지역마다 나눔", (bsi_rank.summary["comparableCount"], "region" in bsi_rank.evidence["filters"]), (18, False))
+    check("BSI: 연 값은 12개월 평균", [(r["period"], r["value"], r.get("yoyPoints")) for r in get_trend("sbiz_bsi", start="2023", end="2024").rows], [("2023", 65.8, None), ("2024", 55.6, -10.2)])
+    check("BSI: 소수를 지움 없이 둠", rows_of(get_trend("sbiz_bsi", start="2024", end="2024"))[0]["value"], 55.6)
+    check("BSI: 빈 달이 있는 해는 온전하지 않음", {r["period"]: r["isComplete"] for r in get_trend("sbiz_bsi", start="2014", end="2015").rows}, {"2014": False, "2015": False})
+    q22 = list_events("2024-10", "2024-10")
+    check("Q22 10월과 겹치는 행사", (q22.status, q22.summary["matchCount"], len(q22.rows)), ("ok", 33, 30))
+    check("Q22 행사 수 비교 금지를 숫자로 알림", any("2020년 10건, 2024년 153건" in t for t in q22.limits), True)
+    check("행사: 상설 행사는 뒤로", [r["isLongRunning"] for r in q22.rows][-1], True)
+    check("행사: 이름으로 찾기", [r["startDate"] for r in list_events(keyword="들불축제").rows], ["2023-03-09", "2025-03-14"])
+    check("행사: 기간 밖", list_events("2026-05").status, "out_of_range")
+    check("행사: 조건 없으면 입력 오류", list_events().status, "invalid_request")
+    check("Q19 낱말이 다른 자료에 나뉘면 센터 전용", (find_data("읍면동 카드").status, find_data("카페 창업").status), ("center_only", "ok"))
 
     q03 = rank_values("spot_visitors", "2024", "2024", top_n=5)
     check("Q03 순위", [(r["spot"], r["value"]) for r in rows_of(q03)], [("한라산국립공원", 928409), ("성산일출봉", 906188), ("천지연폭포", 890241), ("중문대포해안주상절리대", 816210), ("카멜리아힐", 774153)])
@@ -202,6 +226,9 @@ def check_expected_answers() -> None:
         "Q17": [rank_values("card_industry", "2024", "2024", top_n=5)],
         "Q18": [rank_values("card_time", "2024", "2024")],
         "Q19": [find_data("읍면동 카드"), describe_data("1-01")],
+        "Q20": [get_trend("restaurant_open", {"foodGroup": "카페", "area": "애월"}, start="2019")],
+        "Q21": [compare_periods("sbiz_bsi", "2019", "2019", "2024", "2024")],
+        "Q22": [list_events("2024-10", "2024-10")],
     }
     questions = json.loads((PROJECT_ROOT / "reference" / "eval_questions.json").read_text(encoding="utf-8"))["questions"]
     for q in questions:
@@ -317,7 +344,7 @@ def check_claude_request() -> None:
         first, second = _FakeClaude.requests[0], _FakeClaude.requests[1]
         check("Claude: 모델과 대체 설정", (first["body"]["model"], first["body"]["fallbacks"], first["beta"]), ("claude-opus-5-5", "default", "server-side-fallback-2026-07-01"))
         check("Claude: 캐시와 노력 수준", (first["body"]["cache_control"], first["body"]["output_config"]), ({"type": "ephemeral"}, {"effort": "medium"}))
-        check("Claude: 도구 수", len(first["body"]["tools"]), 9)
+        check("Claude: 도구 수", len(first["body"]["tools"]), 10)
         check("Claude: 생각 블록을 그대로 돌려보냄", second["body"]["messages"][1]["content"][0]["signature"], "sig")
         check("Claude: 도구 결과", second["body"]["messages"][2]["content"][0]["tool_use_id"], "toolu_1")
 

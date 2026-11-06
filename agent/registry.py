@@ -16,7 +16,7 @@ _FILTERS = {
     "properties": {
         "spot": {"type": "string", "description": "관광지 이름"},
         "sigungu": {"type": "string", "enum": ["제주시", "서귀포시"]},
-        "category": {"type": "string"},
+        "category": {"type": "string", "description": "관광지 분류 또는 음식점 원본 소분류"},
         "visitorType": {"type": "string", "enum": ["내국인", "외국인"]},
         "purpose": {"type": "string", "description": "방문목적 또는 여행형태 항목 (예: 레저스포츠, 개별여행)"},
         "classType": {"type": "string", "enum": ["방문목적", "여행형태"]},
@@ -34,6 +34,11 @@ _FILTERS = {
         "spenderGroup": {"type": "string", "enum": ["관광객(추정)", "제주도민", "법인"]},
         "userType": {"type": "string", "enum": ["내국인", "제주도민", "법인", "중국", "일본", "동남아", "기타외국"]},
         "timeSlot": {"type": "string", "enum": ["오전", "점심", "오후", "저녁", "밤"]},
+        "region": {"type": "string", "description": "경기지수 지역 (전국, 제주, 서울 등 시도)"},
+        "outlook": {"type": "string", "enum": ["체감", "전망"]},
+        "area": {"type": "string", "description": "읍면동 (예: 애월읍, 연동)"},
+        "foodGroup": {"type": "string", "enum": ["카페", "한식", "주점", "치킨", "고기구이", "횟집", "일식", "중식", "양식", "외국음식", "분식", "패스트푸드", "제과·아이스크림", "편의점", "기타"], "description": "음식점 업종 묶음. 카페는 커피숍·다방 등을 묶은 값"},
+        "businessType": {"type": "string", "enum": ["일반음식점", "휴게음식점"]},
     },
     "additionalProperties": False,
 }
@@ -143,6 +148,15 @@ TOOL_DEFINITIONS = [
             "date": {"type": "string", "description": "YYYY-MM-DD"},
         },
     ),
+    _tool(
+        "list_events",
+        "제주 주요 행사(축제, 공연, 전시)를 기간이나 이름으로 찾는다. 그 기간에 무슨 행사가 있었는지 물을 때 쓴다. 행사 수가 늘었는지 비교하는 데는 쓰지 않는다.",
+        {
+            "start": _MONTH,
+            "end": _MONTH,
+            "keyword": {"type": "string", "description": "행사 이름에 들어갈 낱말 (예: 들불, 수국)"},
+        },
+    ),
 ]
 
 _FUNCTIONS = {
@@ -155,6 +169,7 @@ _FUNCTIONS = {
     "get_seasonality": tools.get_seasonality,
     "get_day_pattern": tools.get_day_pattern,
     "analyze_weather_effect": tools.analyze_weather_effect,
+    "list_events": tools.list_events,
 }
 _VALIDATORS = {d["name"]: Draft202012Validator(d["input_schema"]) for d in TOOL_DEFINITIONS}
 

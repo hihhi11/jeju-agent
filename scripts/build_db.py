@@ -36,7 +36,28 @@ BUS_STATION_END = "2026-10-31"
 BUS_STATION_RATIO_LOW = 0.7
 # 같은 이름의 정류소가 이 값(도, 약 3km) 이상 떨어져 있으면 위치를 정하지 않는다
 STOP_SPREAD_DEGREE = 0.03
-NAME_PUNCTUATION = r"[\s\-\.·,()\[\]]"
+# 음식점 목록은 2025-09-02 갱신본이다. 폐업 기록이 1994년부터라 그 전에 문을 닫은 곳은 빠졌을 수 있어
+# 2000년대 초 폐업 건수가 적어(카페 2000~2002년 1~26건) 2010년부터 세고, 마지막 달은 갱신 직전 달(2025-08)까지 쓴다
+RESTAURANT_START = "2010-01-01"
+RESTAURANT_END = "2025-09-01"
+# 원본 소분류를 사용자가 부르는 말로 묶는다. 이 프로젝트가 정한 묶음이고 나머지는 기타다
+FOOD_GROUPS = {
+    "카페": ("커피숍", "까페", "다방", "전통찻집", "떡카페"),
+    "제과·아이스크림": ("과자점", "아이스크림"),
+    "주점": ("호프/통닭", "정종/대포집/소주방", "감성주점", "라이브카페"),
+    "치킨": ("통닭(치킨)",),
+    "한식": ("한식", "탕류(보신용)", "냉면집"),
+    "고기구이": ("식육(숯불구이)",),
+    "횟집": ("횟집", "복어취급"),
+    "일식": ("일식",),
+    "중식": ("중국식",),
+    "양식": ("경양식", "패밀리레스트랑"),
+    "외국음식": ("외국음식전문점(인도,태국등)",),
+    "분식": ("분식", "김밥(도시락)"),
+    "패스트푸드": ("패스트푸드",),
+    "편의점": ("편의점",),
+}
+NAME_PUNCTUATION =r"[\s\-\.·,()\[\]]"
 NAME_KEY_SQL = f"upper(regexp_replace({{0}}, '{NAME_PUNCTUATION}', '', 'g'))"
 
 
@@ -104,6 +125,22 @@ def _load_card(con: duckdb.DuckDBPyConnection, src) -> None:
         SELECT dtYearMonth, timeSlot, userType, {group} AS spenderGroup, ageRange, useAmountMillion * 1000000 AS useAmount
         FROM {src('card_time_monthly')}
     """)
+
+
+def _load_local_business(con: duckdb.DuckDBPyConnection, src) -> None:
+    con.execute(f"CREATE TABLE sbiz_bsi_monthly AS SELECT * FROM {src('sbiz_bsi_monthly')}")
+    groups = " ".join(f"WHEN category IN ({', '.join(repr(c) for c in cats)}) THEN '{name}'" for name, cats in FOOD_GROUPS.items())
+    con.execute(f"CREATE TABLE restaurants AS SELECT *, CASE {groups} ELSE '기타' END AS foodGroup FROM {src('restaurants')}")
+    # 인허가와 폐업을 달별 건수로 센다. 0건인 달은 도구가 채운다
+    con.execute(f"""
+        CREATE TABLE restaurant_monthly AS
+        SELECT date_trunc('month', d)::DATE AS dtYearMonth, eventType, sigungu, area, businessType, category, foodGroup, count(*) AS cnt
+        FROM (SELECT licenseDate AS d, '인허가' AS eventType, * FROM restaurants
+              UNION ALL SELECT closeDate, '폐업', * FROM restaurants WHERE closeDate IS NOT NULL)
+        WHERE d >= DATE '{RESTAURANT_START}' AND d < DATE '{RESTAURANT_END}'
+        GROUP BY ALL
+    """)
+    con.execute(f"CREATE TABLE jeju_events AS SELECT *, datediff('day', startDate, endDate) + 1 AS durationDays FROM {src('jeju_events')}")
 
 
 def _load_foreign_arrivals(con: duckdb.DuckDBPyConnection, src) -> None:
@@ -574,6 +611,19 @@ def _check(con: duckdb.DuckDBPyConnection, src) -> None:
         raise ValueError(f"카드 시간대·업종 금액 비율이 벗어났습니다: {low:.3f}~{high:.3f}")
     print(f"  카드 시간대/업종 금액 비율: {low:.3f}~{high:.3f}")
 
+    same("BSI 행 수", "SELECT count(*) FROM sbiz_bsi_monthly", f"SELECT count(*) FROM {src('sbiz_bsi_monthly')}")
+    if one("SELECT count(*) FROM (SELECT 1 FROM sbiz_bsi_monthly GROUP BY dtYearMonth, region, outlook HAVING count(*) > 1)"):
+        raise ValueError("sbiz_bsi_monthly: 같은 달·지역·구분의 행이 여럿입니다")
+    restaurants = src("restaurants")
+    window = f"BETWEEN DATE '{RESTAURANT_START}' AND DATE '{RESTAURANT_END}' - 1"
+    same("음식점 인허가 건수", "SELECT sum(cnt) FROM restaurant_monthly WHERE eventType = '인허가'", f"SELECT count(*) FROM {restaurants} WHERE licenseDate {window}")
+    same("음식점 폐업 건수", "SELECT sum(cnt) FROM restaurant_monthly WHERE eventType = '폐업'", f"SELECT count(*) FROM {restaurants} WHERE closeDate {window}")
+    if one("SELECT count(*) FROM restaurants WHERE closeDate < licenseDate OR (status = '폐업') <> (closeDate IS NOT NULL)") > 1:
+        raise ValueError("restaurants: 폐업 상태와 폐업일이 맞지 않는 행이 늘었습니다")
+    same("행사 행 수", "SELECT count(*) FROM jeju_events", f"SELECT count(*) FROM {src('jeju_events')}")
+    other = one("SELECT count(*) FROM restaurants WHERE foodGroup = '기타'")
+    print(f"  음식점 묶음이 기타인 업소: {other:,}곳")
+
     uneven = one("""
         SELECT count(*) FROM (
             SELECT dtYearMonth FROM visit_purpose GROUP BY dtYearMonth
@@ -654,6 +704,7 @@ def main() -> int:
             ("기본 표", lambda: _load_base_tables(con, src)),
             ("외국인 입도객", lambda: _load_foreign_arrivals(con, src)),
             ("카드 이용", lambda: _load_card(con, src)),
+            ("소상공인 경기·음식점·행사", lambda: _load_local_business(con, src)),
             ("관광지 표기·시군", lambda: _load_spots(con)),
             ("날짜·기상", lambda: _load_calendar_and_weather(con, src)),
             ("기초지자체 방문자", lambda: _load_tour_local(con, src)),
