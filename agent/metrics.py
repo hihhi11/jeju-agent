@@ -219,24 +219,11 @@ METRICS: dict[str, Metric] = {
             break_month="2026-01",
             limits=(
                 PLATFORM_PREFIX + " 티맵 내비게이션으로 목적지에 도착한 건수라 사람 수가 아니고, 티맵을 쓰지 않은 차는 빠진다.",
-                "받은 파일은 도민과 관광객을 나누지 않는다.",
+                "받은 파일은 도민과 관광객을 나누지 않는다. 읍면동별 관광객 수 자료는 없어 관광객이 몰린 곳을 물으면 이 값으로 대신 보여 주되 관광객 순위라고 단정하지 않는다.",
                 "2026-01부터 제공사의 도착 집계 방식이 바뀌어 그 전과 비교하지 않는다.",
                 "2022-10은 추자면 값이 없다.",
             ),
-            note="읍면동별 차량 도착 건수(티맵). 차로 많이 찾는 곳. 2026-01을 넘는 비교 불가",
-        ),
-        Metric(
-            "area_visitors", "읍면동 방문객 추정치", "명(월 합계)", "area_visitors_monthly", "dtYearMonth", "visitorCnt", "area_visitors_monthly",
-            {"area": "area", "sigungu": "sigungu", "visitorType": "visitorType"},
-            default_group="area",
-            breakdown="visitorType",
-            limits=(
-                PLATFORM_PREFIX + " SKT 통신 자료로 추정한 값이다.",
-                "방문객을 세는 기준(도민 포함 여부, 같은 사람을 여러 번 세는지)이 자료에 없어 실제 사람 수로 말하지 않는다.",
-                "시별 방문자 추정치와 출처·기준이 달라 비교하거나 더하지 않는다.",
-                "이용 조건 칸이 플랫폼 페이지에 비어 있어 확인하지 못했다.",
-            ),
-            note="읍면동별 월간 방문객(SKT). 관광객이 몰리는 읍면동. visitorType(내국인/외국인)",
+            note="읍면동별 차량 도착 건수(티맵). 차로 많이 찾는 곳, 관광객이 몰리는 읍면동을 물을 때 대신 쓴다. 2026-01을 넘는 비교 불가",
         ),
         Metric(
             "tourist_spending", "내국인 관광객 1인당 지출", "원", "tourist_spending_monthly", "dtYearMonth", "amount", "tourist_spending_monthly",

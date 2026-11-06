@@ -25,6 +25,7 @@ from agent.display import DIMMED_OPACITY, build_figure, chart_note, clarificatio
 from agent.llm import ClaudeConversation, LLMError, OpenAICompatibleConversation, ToolCall, Turn
 from agent.registry import TOOL_DEFINITIONS, execute_tool
 from agent.common import query
+from agent.metrics import METRICS
 from agent.tools import analyze_weather_effect, compare_periods, describe_data, find_data, get_day_pattern, get_seasonality, get_trend, list_events, rank_values, resolve_spot
 from agent.verify import unverified_numbers
 
@@ -122,9 +123,12 @@ def check_tools() -> None:
     check("1인당 지출: 하루 기준이 아니라고 알림", any("하루 기준 값은 없다" in t for t in q23.limits), True)
     check("1인당 지출: 2024년과 비교 안 함", compare_periods("tourist_spending", "2024", "2024", "2025", "2025").status, "not_comparable")
     check("1인당 지출: 작은 금액 차트는 원 그대로", build_figure(q23).layout.xaxis.ticksuffix, "원")
-    q24 = rank_values("area_visitors", "2025", "2025", top_n=3)
-    check("Q24 읍면동 방문객 순위", [(r["area"], r["value"]) for r in rows_of(q24)], [("용담2동", 16314917), ("애월읍", 11171339), ("안덕면", 9114131)])
-    check("Q24 실제 사람 수가 아니라고 알림", any("실제 사람 수로 말하지 않는다" in t for t in q24.limits), True)
+    q24 = rank_values("vehicle_arrivals", "2025", "2025", top_n=3)
+    check("Q24 차량 도착 순위", [(r["area"], r["value"]) for r in rows_of(q24)], [("애월읍", 1115875), ("안덕면", 919019), ("용담2동", 858046)])
+    check("Q24 관광객 순위라고 단정하지 않게 알림", any("관광객 순위라고 단정하지 않는다" in t for t in q24.limits), True)
+    check("읍면동 방문객(SKT) 지표는 쓰지 않음", "area_visitors" in METRICS, False)
+    q07 = compare_periods("arrivals", "2019", "2019", "2025", "2025", group_by="visitorType")
+    check("Q07 내국인·외국인 둘뿐이면 작은 기준 표시 안 함", [r["isSmallBase"] for r in rows_of(q07)], [False, False])
     check("Q25 크루즈 연도별", [(r["period"], r["value"], r["isComplete"]) for r in rows_of(get_trend("cruise_passengers"))], [("2024", 641232, True), ("2025", 756031, True), ("2026", 630861, False)])
     check("차량 도착: 2026-01 집계 변경을 넘는 비교 거부", compare_periods("vehicle_arrivals", "2025-01", "2025-06", "2026-01", "2026-06").status, "not_comparable")
     check("차량 도착 순위 1위", rows_of(rank_values("vehicle_arrivals", "2025", "2025", top_n=1))[0]["area"], "애월읍")
@@ -230,7 +234,7 @@ def check_expected_answers() -> None:
         "Q04": [get_trend("visit_purpose", {"purpose": "레저스포츠"})],
         "Q05": [get_trend("arrivals", start="2024", end="2024")],
         "Q06": [compare_periods("spot_visitors", "2019", "2019", "2024", "2024")],
-        "Q07": [compare_periods("arrivals", "2019", "2019", "2024", "2024")],
+        "Q07": [compare_periods("arrivals", "2019", "2019", "2024", "2024"), compare_periods("arrivals", "2019", "2019", "2025", "2025")],
         "Q08": [get_seasonality("spot_visitors", {"sigungu": "서귀포시"})],
         "Q09": [analyze_weather_effect()],
         "Q10": [resolve_spot("성산"), get_trend("spot_visitors", {"spot": "성산일출봉"}, "2025", "2025")],
@@ -247,7 +251,7 @@ def check_expected_answers() -> None:
         "Q21": [compare_periods("sbiz_bsi", "2019", "2019", "2024", "2024")],
         "Q22": [list_events("2024-10", "2024-10")],
         "Q23": [rank_values("tourist_spending", "2025", "2025", top_n=5), get_trend("tourist_spending")],
-        "Q24": [rank_values("area_visitors", "2025", "2025", top_n=5), rank_values("area_visitors", "2025", "2025", {"visitorType": "외국인"}, top_n=5)],
+        "Q24": [rank_values("vehicle_arrivals", "2025", "2025", top_n=5)],
         "Q25": [get_trend("cruise_passengers"), get_trend("cruise_passengers", {"passengerType": "외국인"})],
     }
     questions = json.loads((PROJECT_ROOT / "reference" / "eval_questions.json").read_text(encoding="utf-8"))["questions"]

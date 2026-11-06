@@ -147,8 +147,8 @@
       "persona": "관광 담당 공무원",
       "question": "제주 입도객이 2019년 수준으로 회복됐어?",
       "expectedTools": ["compare_periods"],
-      "expectedAnswer": "아직 다 회복하지 못했다. 2024년 입도객은 13,767,350명으로 2019년 15,286,136명의 90.1%다.",
-      "mustMention": ["90.1%", "15,286,136"],
+      "expectedAnswer": "아직 다 회복하지 못했다. 가장 최근 온전한 해인 2025년 입도객은 13,861,738명으로 2019년 15,286,136명의 90.7%다. 2024년은 13,767,350명으로 90.1%였다.",
+      "mustMention": ["90.7%", "15,286,136"],
       "limits": ["관광협회 집계를 이은 자료다"],
       "trap": "제주 공항 도착 이용자(94.5%)를 입도객 회복률로 말하면 오답이다. 예전에는 입도객이 2021-08부터라 비교할 수 없었지만 2001년부터 자료를 넣어 이제 직접 비교한다",
       "checks": [
@@ -166,6 +166,16 @@
           "label": "2024년 입도객",
           "sql": "SELECT sum(totalCnt)::BIGINT FROM arrivals_monthly WHERE year(dtYearMonth) = 2024",
           "expected": 13767350
+        },
+        {
+          "label": "2025년 입도객 (12개월)",
+          "sql": "SELECT sum(totalCnt)::BIGINT FROM arrivals_monthly WHERE year(dtYearMonth) = 2025 HAVING count(*) = 12",
+          "expected": 13861738
+        },
+        {
+          "label": "2025년의 2019년 대비(%)",
+          "sql": "SELECT round(100.0 * sum(totalCnt) FILTER (WHERE year(dtYearMonth) = 2025) / sum(totalCnt) FILTER (WHERE year(dtYearMonth) = 2019), 1) FROM arrivals_monthly",
+          "expected": 90.7
         },
         {
           "label": "2019 대비(%)",
@@ -577,27 +587,27 @@
       "id": "Q24",
       "feature": "F2",
       "persona": "관광 담당 공무원",
-      "question": "2025년에 방문객이 가장 많이 몰린 읍면동은 어디야? 외국인은?",
+      "question": "2025년에 관광객이 가장 많이 몰린 읍면동은 어디야?",
       "expectedTools": ["rank_values"],
-      "expectedAnswer": "2025년 방문객 추정치는 용담2동 16,314,917명, 애월읍 11,171,339명, 안덕면 9,114,131명 순이다. 외국인만 보면 연동 516,969명, 노형동 233,631명 순이다. 통신 추정치를 달마다 더한 값이라 실제 사람 수가 아니다.",
-      "mustMention": ["용담2동", "애월읍", "연동"],
-      "limits": ["실제 사람 수가 아니다", "도민 포함 여부를 확인하지 못했다"],
-      "trap": "합계를 2025년에 그 동네를 찾은 실제 사람 수처럼 말하면 틀린다. 시별 방문자 추정치와 더하거나 비교하면 안 된다",
+      "expectedAnswer": "읍면동별 관광객 수 자료는 없어 차량 도착 건수(티맵)로 본다. 2025년 차량 도착은 애월읍 1,115,875건, 안덕면 919,019건, 용담2동 858,046건 순이다. 도민 차량도 섞여 있고 사람 수가 아니라 도착 건수다.",
+      "mustMention": ["애월읍", "1,115,875", "안덕면"],
+      "limits": ["도민과 관광객을 나누지 않는다", "사람 수가 아니다"],
+      "trap": "차량 도착 건수를 관광객 수처럼 말하면 틀린다. 도민 차량이 섞여 있어 관광객이 몰린 순위라고 단정하면 안 된다",
       "checks": [
         {
-          "label": "전체 상위 3곳",
-          "sql": "SELECT string_agg(area || ':' || v, ', ' ORDER BY v DESC) FROM (SELECT area, sum(visitorCnt)::BIGINT AS v FROM area_visitors_monthly WHERE year(dtYearMonth) = 2025 GROUP BY 1 ORDER BY v DESC LIMIT 3)",
-          "expected": "용담2동:16314917, 애월읍:11171339, 안덕면:9114131"
-        },
-        {
-          "label": "외국인 상위 2곳",
-          "sql": "SELECT string_agg(area || ':' || v, ', ' ORDER BY v DESC) FROM (SELECT area, sum(visitorCnt)::BIGINT AS v FROM area_visitors_monthly WHERE year(dtYearMonth) = 2025 AND visitorType = '외국인' GROUP BY 1 ORDER BY v DESC LIMIT 2)",
-          "expected": "연동:516969, 노형동:233631"
+          "label": "차량 도착 상위 3곳",
+          "sql": "SELECT string_agg(area || ':' || v, ', ' ORDER BY v DESC) FROM (SELECT area, sum(arrivalCnt)::BIGINT AS v FROM vehicle_arrivals_monthly WHERE year(dtYearMonth) = 2025 GROUP BY 1 ORDER BY v DESC LIMIT 3)",
+          "expected": "애월읍:1115875, 안덕면:919019, 용담2동:858046"
         },
         {
           "label": "2025년 12개월 43곳 모두 있음",
-          "sql": "SELECT count(*) FROM (SELECT DISTINCT dtYearMonth, area FROM area_visitors_monthly WHERE year(dtYearMonth) = 2025)",
+          "sql": "SELECT count(*) FROM (SELECT DISTINCT dtYearMonth, area FROM vehicle_arrivals_monthly WHERE year(dtYearMonth) = 2025)",
           "expected": 516
+        },
+        {
+          "label": "읍면동 방문객(SKT) 표는 DB에 없음",
+          "sql": "SELECT count(*) FROM information_schema.tables WHERE table_name = 'area_visitors_monthly'",
+          "expected": 0
         }
       ]
     },

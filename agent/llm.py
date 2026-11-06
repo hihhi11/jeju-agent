@@ -22,7 +22,7 @@ MAX_TOKENS = 16000
 # 안전 분류기가 요청을 거절하면 서버가 다른 모델로 다시 실행한다
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
-DEFAULT_PROVIDER = "gemini"
+DEFAULT_PROVIDER = "claude"
 OPENAI_COMPATIBLE = {
     "gemini": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "key_env": "GEMINI_API_KEY", "model": "gemini-3.6-flash"},
     "ollama": {"base_url": "http://localhost:11434/v1", "key_env": None, "model": None},

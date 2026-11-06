@@ -35,6 +35,8 @@ MIN_DAY_TYPE_DAYS = 8
 DAYS_OF_WEEK = ["월", "화", "수", "목", "금", "토", "일"]
 # 기준값이 중앙값의 이 비율보다 작으면 비율이 크게 나온다고 표시한다
 SMALL_BASE_RATIO = 0.25
+# 대상이 적으면(내국인·외국인 둘 등) 중앙값이 기준 구실을 못 해 작은 기준 표시를 하지 않는다
+SMALL_BASE_MIN_GROUPS = 5
 
 
 def _tokens(text: str) -> list[str]:
@@ -625,7 +627,7 @@ def compare_periods(metric: str, period_a_start: str, period_a_end: str, period_
         b = frame_b.groupby(group)["value"].agg(m.agg)
         if m.agg == "mean":
             a, b = a.round(1), b.round(1)
-        median_base = a.median() if len(a) else 0
+        median_base = a.median() if len(a) >= SMALL_BASE_MIN_GROUPS else 0
         for name in a.index:
             rows.append({group: name, "valueA": a[name], "valueB": b.get(name, 0), "ratioPct": ratio_pct(b.get(name, 0), a[name]), "changePct": pct_change(b.get(name, 0), a[name]), "reachedBase": bool(b.get(name, 0) >= a[name]), "isSmallBase": bool(a[name] < median_base * SMALL_BASE_RATIO), **_points(m, b.get(name), a[name])})
         rows.sort(key=lambda r: -(r["ratioPct"] or 0))

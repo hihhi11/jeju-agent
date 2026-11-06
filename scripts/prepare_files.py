@@ -461,15 +461,6 @@ def vehicle_arrivals_monthly(srcs: list[Path], out: Path) -> None:
     _save_df(frame.sort_values(["dtYearMonth", "area"]), out)
 
 
-def area_visitors_monthly(srcs: list[Path], out: Path) -> None:
-    df = pd.read_csv(srcs[0], encoding="utf-8-sig", dtype={"기준연월": str, "읍면동코드": str})
-    if not (df["총 방문객수 (내국인+외국인)"] == df["내국인 방문객수"] + df["외국인 방문객수"]).all():
-        raise ValueError(f"{srcs[0].name}: 총 방문객수가 내국인+외국인과 다른 행이 있습니다")
-    month = _month_start(df["기준연월"], "%Y%m")
-    parts = [pd.DataFrame({"dtYearMonth": month, "sigungu": df["시군구명"], "area": df["읍면동명"], "visitorType": kind, "visitorCnt": df[col]}) for kind, col in (("내국인", "내국인 방문객수"), ("외국인", "외국인 방문객수"))]
-    _save_df(pd.concat(parts, ignore_index=True).sort_values(["dtYearMonth", "area", "visitorType"]), out)
-
-
 @dataclass(frozen=True)
 class Dataset:
     desc: str
@@ -562,11 +553,6 @@ DATASETS = {
         "월별 읍면동 차량 도착 건수 (티맵, 제주관광빅데이터플랫폼)",
         ("월별 읍면동 차량 도착_2021-01~2026-10.csv",),
         vehicle_arrivals_monthly,
-    ),
-    "area_visitors_monthly": Dataset(
-        "월별 읍면동 방문객 (SKT, 내국인·외국인, 제주관광빅데이터플랫폼)",
-        ("SKT 읍면동별 유동인구 (통합)_2019-01~2026-08.csv",),
-        area_visitors_monthly,
     ),
     "bus_hourly": Dataset(
         "일별 시간대별 버스 승차 인원",

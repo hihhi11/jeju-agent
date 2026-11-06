@@ -154,7 +154,6 @@ def _load_platform(con: duckdb.DuckDBPyConnection, src) -> None:
         UNION ALL SELECT dtYearMonth, '승합차', vanRentHours FROM rental_car_monthly
     """)
     con.execute(f"CREATE TABLE vehicle_arrivals_monthly AS SELECT * FROM {src('vehicle_arrivals_monthly')}")
-    con.execute(f"CREATE TABLE area_visitors_monthly AS SELECT * FROM {src('area_visitors_monthly')}")
 
 
 def _load_foreign_arrivals(con: duckdb.DuckDBPyConnection, src) -> None:
@@ -650,8 +649,7 @@ def _check(con: duckdb.DuckDBPyConnection, src) -> None:
     same("입도객 달 수", "SELECT count(*) FROM arrivals_monthly", f"SELECT count(*) FROM {src('arrivals_long_monthly')}")
     same("크루즈 승객 합계", "SELECT sum(passengerCnt) FROM cruise_monthly", f"SELECT sum(passengerCnt) FROM {src('cruise_monthly')}")
     same("차량 도착 합계", "SELECT sum(arrivalCnt) FROM vehicle_arrivals_monthly", f"SELECT sum(arrivalCnt) FROM {src('vehicle_arrivals_monthly')}")
-    same("읍면동 방문객 합계", "SELECT sum(visitorCnt) FROM area_visitors_monthly", f"SELECT sum(visitorCnt) FROM {src('area_visitors_monthly')}")
-    for table in ("vehicle_arrivals_monthly", "area_visitors_monthly"):
+    for table in ("vehicle_arrivals_monthly",):
         short = con.execute(f"""
             SELECT string_agg(strftime(m, '%Y-%m') || ' ' || n || '곳', ', ') FROM (
                 SELECT dtYearMonth AS m, count(DISTINCT area) AS n FROM {table} GROUP BY 1
