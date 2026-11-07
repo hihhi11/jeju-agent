@@ -643,6 +643,39 @@
           "expected": "2026-10"
         }
       ]
+    },
+    {
+      "id": "Q26",
+      "feature": "F3",
+      "persona": "소상공인",
+      "question": "횟집을 하는데, 2024년 회 매출이 코로나 전(2019년)보다 늘었어? 2023년보다는?",
+      "expectedTools": ["compare_periods"],
+      "expectedAnswer": "음식점 POS 표본 매장의 회류 매출은 2019년 12,973,000,000원에서 2024년 21,161,000,000원으로 63.1% 늘었다. 2023년은 11~12월 자료가 없어 연간으로 비교할 수 없고, 같은 1~10월끼리 보면 2024년이 5.5% 많다. 표본 매장 수가 없어 표본 변화인지 알 수 없고 도민과 관광객을 나눌 수 없다.",
+      "mustMention": [["63.1", "163.1"], ["11~12월", "11월", "12월"]],
+      "limits": ["표본 매장 매출이라 제주 전체 외식 매출이 아니다", "표본 매장 수 변화인지 알 수 없다", "도민과 관광객을 나눌 수 없다"],
+      "trap": "2023년 10개월 합계를 2024년 12개월과 비교해 29.8% 늘었다고 하거나, 관광객이 늘어서라고 원인을 단정하면 안 된다",
+      "checks": [
+        {
+          "label": "2019년·2024년 회류 매출",
+          "sql": "SELECT string_agg(y || ':' || t, ', ' ORDER BY y) FROM (SELECT year(dtYearMonth) AS y, sum(salesAmount)::BIGINT AS t FROM menu_sales_monthly WHERE menu = '회류' AND year(dtYearMonth) IN (2019, 2024) GROUP BY 1)",
+          "expected": "2019:12973000000, 2024:21161000000"
+        },
+        {
+          "label": "2019년 대비 증감률",
+          "sql": "SELECT round(100.0 * sum(salesAmount) FILTER (WHERE year(dtYearMonth) = 2024) / sum(salesAmount) FILTER (WHERE year(dtYearMonth) = 2019) - 100, 1) FROM menu_sales_monthly WHERE menu = '회류'",
+          "expected": 63.1
+        },
+        {
+          "label": "2023년 자료가 있는 달 수",
+          "sql": "SELECT count(DISTINCT dtYearMonth) FROM menu_sales_monthly WHERE year(dtYearMonth) = 2023",
+          "expected": 10
+        },
+        {
+          "label": "1~10월끼리 2023년 대비 증감률",
+          "sql": "SELECT round(100.0 * sum(salesAmount) FILTER (WHERE year(dtYearMonth) = 2024) / sum(salesAmount) FILTER (WHERE year(dtYearMonth) = 2023) - 100, 1) FROM menu_sales_monthly WHERE menu = '회류' AND month(dtYearMonth) <= 10",
+          "expected": 5.5
+        }
+      ]
     }
   ]
 }

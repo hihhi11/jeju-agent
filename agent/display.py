@@ -20,7 +20,7 @@ FONT_FAMILY = '"Malgun Gothic", system-ui, "Segoe UI", sans-serif'
 # 이보다 많으면 색으로 구분할 수 없어 표로만 보여 준다
 MAX_SERIES = len(SERIES_COLORS)
 # 이 길이부터 이름이 긴 막대는 가로로 눕히면 읽기 쉽다
-TIME_AXES = {"period", "month", "range", "dayOfWeek"}
+TIME_AXES = {"period", "month", "range", "dayOfWeek", "quarter", "year", "hour"}
 DIMMED_OPACITY = 0.4
 
 COLUMN_LABELS = {
@@ -98,6 +98,16 @@ COLUMN_LABELS = {
     "passengerType": "승객 구분",
     "ship": "선박",
     "carType": "차종",
+    "dong": "읍면동",
+    "hour": "시간",
+    "quarter": "분기",
+    "year": "연",
+    "userGroup": "이용자 구분",
+    "tourType": "관광구분",
+    "age": "연령대",
+    "areaType": "도심·읍면",
+    "suppressed": "값 가림(10명 미만)",
+    "menu": "메뉴",
 }
 EVIDENCE_LABELS = {
     "label": "지표",
@@ -140,6 +150,9 @@ def rows_frame(rows: list[dict], labels: dict | None = None) -> pd.DataFrame:
     """행을 한글 열 이름의 표로 바꾼다. 내·외국인 내역 같은 묶음 값은 열로 펼친다."""
     frame = pd.json_normalize(clean(rows))
     frame.columns = [column.removeprefix("breakdown.") for column in frame.columns]
+    # 가린 칸이 하나도 없으면 '아니오'만 늘어선 열은 헷갈리기만 해서 뺀다
+    if "suppressed" in frame.columns and not frame["suppressed"].any():
+        frame = frame.drop(columns="suppressed")
     for column in frame.columns:
         if frame[column].map(lambda v: isinstance(v, bool)).any():
             frame[column] = frame[column].map({True: "예", False: "아니오"})
@@ -190,7 +203,8 @@ def _unit(result: ToolResult, y: str) -> str:
 
 
 def _x_text(x: str, value) -> str:
-    return f"{value}월" if x == "month" else str(value)
+    # 계절성의 달(1~12)만 "월" 을 붙인다. 센터 자료의 "2024-07" 은 그대로 쓴다
+    return f"{value}월" if x == "month" and isinstance(value, int) else str(value)
 
 
 def _is_dimmed(row: dict) -> bool:

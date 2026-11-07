@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from agent.center import CenterStore
 from agent.common import ToolResult
 from agent.llm import Conversation, LLMError, ToolOutcome, Turn, make_conversation
 from agent.metrics import metrics_for_prompt
@@ -29,13 +30,16 @@ SYSTEM_PROMPT = f"""당신은 제주 관광 데이터 분석 도우미입니다.
 - out_of_range: 요청 기간에 자료가 없다고 먼저 말하고, 제공 기간과 가장 가까운 값을 그 해의 값으로 안내합니다.
 - not_comparable: 비교할 수 없는 이유와 제공 기간을 답변 맨 앞에 말합니다. alternatives 가 있으면 그 지표로 도구를 다시 불러 함께 안내하되, 그 값을 원래 지표의 이름으로 부르지 않습니다.
 - insufficient_sample: 표본 수를 말하고 답을 유보합니다.
-- center_only: 명세만 있어 값을 계산할 수 없다고 말합니다. describe_data 로 가장 관련 있는 명세 하나의 항목을 확인해 안내합니다. 금액 등을 지어내지 않습니다.
+- center_only: 명세만 있어 값을 계산할 수 없다고 말합니다. describe_data 로 가장 관련 있는 명세 하나의 항목을 확인해 안내합니다. 금액 등을 지어내지 않습니다. 1-08(읍면동 카드)과 4-15(읍면동 단기체류 외국인)는 센터에서 CSV를 내려받아 넣으면 계산할 수 있으니, 결과의 download 안내를 쉬운 말로 전합니다.
 - not_found, invalid_request: 입력을 고쳐 다시 부르거나 없다고 말합니다.
 
 ## 지표
 {metrics_for_prompt()}
 
 입도객 전체 수는 arrivals 만 씁니다. 사용자가 틀린 계산 방법을 말하면 그대로 따르지 않고 왜 안 되는지 결과의 수치로 설명합니다 (예: 두 시를 더해 제주 전체로 보기). 최근 동향을 물으면 일부 달만 있는 해를 비교하지 않고 summary.recent12Months 를 씁니다. 순위 기준이 여럿이면 어떤 기준의 순위인지 밝힙니다.
+
+## 센터에서 내려받아 넣은 CSV
+읍면동별 카드 소비, 읍면동별 외국인 방문처럼 센터 자료 1-08, 4-15 에 관한 질문은 analyze_center_csv 를 먼저 부릅니다. 결과는 10 미만 칸을 처리한 집계입니다. summary.groupBy 가 요청과 다르면 작은 칸 때문에 더 큰 단위로 묶었다고 말합니다. suppressed 인 칸은 값이 가려졌다고만 말하고 추정하거나 합계에서 빼서 계산하지 않습니다. 칸을 묶거나 가렸으면 "10명 미만인 칸은 누구인지 짐작될 수 있어 센터 기준에 따라 숨겼다"는 뜻을 쉬운 말로 한 줄 덧붙입니다. 가상 데이터라는 한계가 있으면 답변 첫 줄에 밝힙니다.
 
 ## 답변 형식
 바로 답을 말한 뒤 해석을 3줄 안쪽으로 씁니다. 그 뒤에 다음 두 항목을 짧게 붙입니다.
@@ -64,8 +68,10 @@ class AgentAnswer:
 class Agent:
     """사용자 한 명과의 대화. 되묻기에 답할 수 있게 ask 사이에 기록을 유지한다."""
 
-    def __init__(self, conversation: Conversation | None = None, max_steps: int = MAX_STEPS):
+    def __init__(self, conversation: Conversation | None = None, max_steps: int = MAX_STEPS, center_store: CenterStore | None = None):
         self.conversation = conversation or make_conversation(SYSTEM_PROMPT, TOOL_DEFINITIONS)
+        # 화면에서 넣은 센터 CSV. 화면과 같은 객체라 대화 중에 넣은 파일도 바로 쓴다
+        self.center_store = center_store
         self.max_steps = max_steps
         self.question_log: list[str] = []
         self.all_results: list[ToolResult] = []
@@ -102,7 +108,7 @@ class Agent:
     def _run_tools(self, turn: Turn, answer: AgentAnswer) -> list[ToolOutcome]:
         outcomes = []
         for call in turn.tool_calls:
-            result = execute_tool(call.name, call.arguments)
+            result = execute_tool(call.name, call.arguments, self.center_store)
             answer.tool_calls.append({"name": call.name, "arguments": call.arguments, "status": result.status})
             answer.results.append(result)
             self.all_results.append(result)

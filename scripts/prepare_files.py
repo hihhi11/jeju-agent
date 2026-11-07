@@ -318,6 +318,19 @@ def card_time_monthly(srcs: list[Path], out: Path) -> None:
     _save_df(frame, out)
 
 
+def menu_sales_monthly(srcs: list[Path], out: Path) -> None:
+    # 메뉴 26개는 센터 명세 (참고표2) 메뉴코드표의 대분류와 같다. 원본은 CP949, 금액은 백만 원 단위다
+    df = pd.read_csv(srcs[0], encoding="cp949", dtype={"base_year_month": str})
+    frame = pd.DataFrame(
+        {
+            "dtYearMonth": _month_start(df["base_year_month"], "%Y%m"),
+            "menu": df["menu_name"].str.strip(),
+            "salesAmountMillion": df["sale_amount_by_million"],
+        }
+    )
+    _save_df(frame, out)
+
+
 BSI_REGIONS = ("서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주")
 
 
@@ -513,6 +526,11 @@ DATASETS = {
         "시간대별 카드 이용금액 (월·시간대·이용자 유형·연령)",
         ("시간대별카드이용금액현황.csv",),
         card_time_monthly,
+    ),
+    "menu_sales_monthly": Dataset(
+        "메뉴별 외식업 매출액 (월·메뉴 대분류 26개)",
+        ("메뉴별외식업매출액.csv",),
+        menu_sales_monthly,
     ),
     "sbiz_bsi_monthly": Dataset(
         "소상공인 경기동향 BSI (월·지역·체감/전망)",

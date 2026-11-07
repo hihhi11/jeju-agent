@@ -125,6 +125,10 @@ def _load_card(con: duckdb.DuckDBPyConnection, src) -> None:
         SELECT dtYearMonth, timeSlot, userType, {group} AS spenderGroup, ageRange, useAmountMillion * 1000000 AS useAmount
         FROM {src('card_time_monthly')}
     """)
+    con.execute(f"""
+        CREATE TABLE menu_sales_monthly AS
+        SELECT dtYearMonth, menu, salesAmountMillion * 1000000 AS salesAmount FROM {src('menu_sales_monthly')}
+    """)
 
 
 def _load_local_business(con: duckdb.DuckDBPyConnection, src) -> None:
@@ -629,6 +633,19 @@ def _check(con: duckdb.DuckDBPyConnection, src) -> None:
         raise ValueError(f"카드 시간대·업종 금액 비율이 벗어났습니다: {low:.3f}~{high:.3f}")
     print(f"  카드 시간대/업종 금액 비율: {low:.3f}~{high:.3f}")
 
+    same("외식 메뉴 매출 합계", "SELECT sum(salesAmount) FROM menu_sales_monthly", f"SELECT sum(salesAmountMillion) * 1000000 FROM {src('menu_sales_monthly')}")
+    if one("SELECT count(*) FROM (SELECT 1 FROM menu_sales_monthly GROUP BY dtYearMonth, menu HAVING count(*) > 1)"):
+        raise ValueError("menu_sales_monthly: 같은 달·메뉴의 행이 여럿입니다")
+    # 달마다 메뉴 26개가 모두 있어야 메뉴 순위와 달별 합계를 그대로 쓸 수 있다
+    uneven = one("SELECT count(*) FROM (SELECT 1 FROM menu_sales_monthly GROUP BY dtYearMonth HAVING count(*) <> (SELECT count(DISTINCT menu) FROM menu_sales_monthly))")
+    if uneven:
+        raise ValueError(f"menu_sales_monthly: 메뉴가 빠진 달 {uneven}개")
+    gaps = con.execute("""
+        SELECT string_agg(strftime(m, '%Y-%m'), ', ' ORDER BY m) FROM (
+            SELECT unnest(generate_series(min(dtYearMonth), max(dtYearMonth), INTERVAL 1 MONTH))::DATE AS m FROM menu_sales_monthly)
+        WHERE m NOT IN (SELECT dtYearMonth FROM menu_sales_monthly)
+    """).fetchone()[0]
+    print(f"  외식 메뉴 매출: 빠진 달 {gaps or '없음'}")
     same("BSI 행 수", "SELECT count(*) FROM sbiz_bsi_monthly", f"SELECT count(*) FROM {src('sbiz_bsi_monthly')}")
     if one("SELECT count(*) FROM (SELECT 1 FROM sbiz_bsi_monthly GROUP BY dtYearMonth, region, outlook HAVING count(*) > 1)"):
         raise ValueError("sbiz_bsi_monthly: 같은 달·지역·구분의 행이 여럿입니다")
@@ -742,7 +759,7 @@ def main() -> int:
         steps = (
             ("기본 표", lambda: _load_base_tables(con, src)),
             ("외국인 입도객", lambda: _load_foreign_arrivals(con, src)),
-            ("카드 이용", lambda: _load_card(con, src)),
+            ("카드 이용·외식 메뉴 매출", lambda: _load_card(con, src)),
             ("소상공인 경기·음식점·행사·관광객 지출", lambda: _load_local_business(con, src)),
             ("크루즈·렌터카·차량 도착·읍면동 방문객", lambda: _load_platform(con, src)),
             ("관광지 표기·시군", lambda: _load_spots(con)),

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import threading
@@ -17,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import anthropic
+import pandas as pd
 
 import agent.agent as agent_module
 from agent.agent import SYSTEM_PROMPT, Agent, AgentAnswer
@@ -123,6 +125,18 @@ def check_tools() -> None:
     check("1인당 지출: 하루 기준이 아니라고 알림", any("하루 기준 값은 없다" in t for t in q23.limits), True)
     check("1인당 지출: 2024년과 비교 안 함", compare_periods("tourist_spending", "2024", "2024", "2025", "2025").status, "not_comparable")
     check("1인당 지출: 작은 금액 차트는 원 그대로", build_figure(q23).layout.xaxis.ticksuffix, "원")
+    from agent.registry import _FILTERS
+    check("모든 지표 필터가 LLM 도구 정의에 있음", sorted({d for m in METRICS.values() for d in m.dims} - set(_FILTERS["properties"])), [])
+    menu_enum = _FILTERS["properties"]["menu"]["enum"]
+    check("외식 메뉴 목록이 DB와 같음", sorted(menu_enum), sorted(query("SELECT DISTINCT menu FROM menu_sales_monthly")["menu"]))
+    check("LLM 경로로 메뉴 필터 실행", execute_tool("compare_periods", {"metric": "menu_sales", "period_a_start": "2019", "period_a_end": "2019", "period_b_start": "2024", "period_b_end": "2024", "filters": {"menu": "회류"}}).status, "ok")
+    q26 = compare_periods("menu_sales", "2019", "2019", "2024", "2024", {"menu": "회"})
+    check("Q26 회류 2019·2024 비교", (q26.status, q26.summary["valueA"], q26.summary["valueB"], q26.summary["changePct"]), ("ok", 12973000000, 21161000000, 63.1))
+    check("Q26 2023년은 11~12월이 없어 연간 비교 안 함", compare_periods("menu_sales", "2023", "2023", "2024", "2024", {"menu": "회류"}).status, "not_comparable")
+    check("Q26 같은 1~10월끼리는 비교", compare_periods("menu_sales", "2023-01", "2023-10", "2024-01", "2024-10", {"menu": "회류"}).summary["changePct"], 5.5)
+    check("외식 메뉴: 2023년은 온전하지 않은 해", {r["period"]: r["isComplete"] for r in get_trend("menu_sales", start="2023", end="2023").rows}, {"2023": False})
+    check("외식 메뉴: 표본 매장 수 변화를 알림", any("표본 매장 수" in t for t in q26.limits), True)
+    check("외식 메뉴 순위", [(r["menu"], r["value"]) for r in rows_of(rank_values("menu_sales", "2024", "2024", top_n=2))], [("기타", 115447000000), ("구이류", 108348000000)])
     q24 = rank_values("vehicle_arrivals", "2025", "2025", top_n=3)
     check("Q24 차량 도착 순위", [(r["area"], r["value"]) for r in rows_of(q24)], [("애월읍", 1115875), ("안덕면", 919019), ("용담2동", 858046)])
     check("Q24 관광객 순위라고 단정하지 않게 알림", any("관광객 순위라고 단정하지 않는다" in t for t in q24.limits), True)
@@ -214,6 +228,100 @@ def check_tools() -> None:
     check("잘못된 기간", execute_tool("get_trend", {"metric": "arrivals", "start": "작년"}).status, "invalid_request")
 
 
+def _lines_with_one_hidden(rows: list[dict], dims: list[str]) -> int:
+    """가린 칸이 한 줄에 하나뿐인 줄 수. 0이어야 합계에서 빼서 역산할 수 없다."""
+    frame = pd.DataFrame(rows)
+    count = 0
+    for dim in dims or [None]:
+        others = [d for d in dims if d != dim]
+        groups = [g for _, g in frame.groupby(others)] if others else [frame]
+        count += sum(len(g) > 1 and int(g["suppressed"].sum()) == 1 for g in groups)
+    return count
+
+
+def check_center() -> None:
+    from agent.center import THRESHOLD, CenterStore, analyze_center_csv
+    from scripts.make_center_sample import make_card, make_foreign, to_csv_bytes
+
+    store = CenterStore()
+    card = to_csv_bytes(make_card("202407", seed=1, combos_per_cell=3))
+    store.load("가상_1-08_202407.csv", card)
+    store.load("가상_1-08_202408.csv", to_csv_bytes(make_card("202408", seed=2, combos_per_cell=3)))
+    store.load("가상_4-15_202506.csv", to_csv_bytes(make_foreign("202506", days=2, seed=3)))
+    check("센터: 넣은 자료", [(s["centerNo"], s["months"], s["virtual"]) for s in store.summary()], [("1-08", 2, True), ("4-15", 1, True)])
+
+    def load_error(name: str, data: bytes) -> str:
+        try:
+            CenterStore().load(name, data)
+        except ValueError as exc:
+            return str(exc)
+        return ""
+
+    check("센터: 같은 달을 두 번 넣지 않음", "이미 넣었습니다" in _dup_error(store, card), True)
+    check("센터: UTF-8 이 아니면 안내", "UTF-8" in load_error("x.csv", "base_year_month,가\n1,나".encode("cp949")), True)
+    check("센터: 열이 다르면 없는 열을 알림", "없는 열: use_amt" in load_error("x.csv", card.replace(b'"use_amt"', b'"amount"')), True)
+    other = ",".join(query("SELECT columnName FROM center_columns WHERE centerNo = '1-07' ORDER BY ordinal")["columnName"])
+    check("센터: 지원하지 않는 센터 자료", "아직 분석 기능이 없습니다" in load_error("x.csv", (other + "\n").encode()), True)
+
+    empty = analyze_center_csv(None, "1-08", "use_amt", ["region"])
+    check("센터: CSV 없으면 내려받기 안내", (empty.status, "한 달" in empty.summary["download"]), ("center_only", True))
+    check("센터: 명세 조회에도 내려받기 안내", describe_data("1-08").alternatives[0]["tool"], "analyze_center_csv")
+    check("센터: 지원하지 않는 명세는 안내 없음", describe_data("1-01").alternatives, [])
+
+    cases = [
+        ("1-08", "user_cnt", ["dong", "industry"], {}),
+        ("1-08", "user_cnt", ["industry"], {"dong": "추자"}),
+        ("1-08", "user_cnt", ["userType"], {"dong": "추자"}),
+        ("1-08", "user_cnt", ["month", "age"], {"dong": "우도"}),
+        ("4-15", "visit_pop", ["nationality"], {}),
+        ("4-15", "visit_pop", ["dong", "nationality"], {}),
+        ("4-15", "visit_pop", ["hour"], {"dong": "추자"}),
+    ]
+    for dataset, measure, group_by, filters in cases:
+        result = analyze_center_csv(store, dataset, measure, group_by, filters)
+        name = f"센터 {dataset} {'·'.join(group_by)} {filters}"
+        check(f"{name}: 결과", result.status in ("ok", "insufficient_sample"), True)
+        if result.status != "ok":
+            continue
+        shown = [r["value"] for r in clean(result.rows) if not r["suppressed"]]
+        check(f"{name}: 보이는 칸은 모두 {THRESHOLD} 이상", [v for v in shown if v < THRESHOLD], [])
+        check(f"{name}: 가린 칸은 값이 없음", [r for r in clean(result.rows) if r["suppressed"] and r["value"] is not None], [])
+        check(f"{name}: 가린 칸을 역산할 수 없음", _lines_with_one_hidden(clean(result.rows), result.summary["groupBy"]), 0)
+        check(f"{name}: 원본 행이 아니라 집계만 보냄", set().union(*[r.keys() for r in result.rows]) <= set(result.summary["groupBy"]) | {"value", "suppressed"}, True)
+        check(f"{name}: 가상 데이터라고 알림", "가상 데이터" in result.limits[0], True)
+        check(f"{name}: 값 가림을 쉬운 말로 설명하고 영문 열 이름은 쓰지 않음", (any(l.startswith("값 가림이란") for l in result.limits), any("suppressed" in l or "_v02" in l for l in result.limits + [result.evidence["label"]])), (True, False))
+        hidden = any(r["suppressed"] for r in result.rows)
+        check(f"{name}: 화면 표의 가림 열은 가린 칸이 있을 때만", "값 가림(10명 미만)" in rows_frame(result.rows).columns, hidden)
+
+    nations = analyze_center_csv(store, "4-15", "visit_pop", ["nationality"])
+    check("센터: 작은 국적은 합쳐서 순위 유지", (nations.summary["groupBy"], any(r["nationality"] == "그 밖의 국적" for r in nations.rows)), (["nationality"], True))
+    check("센터: 국적 코드는 한글 이름", [r["nationality"] for r in nations.rows if r["nationality"].isascii()], [])
+    region = analyze_center_csv(store, "1-08", "use_amt", ["region"])
+    raw_total = int(pd.read_csv(io.BytesIO(card))["use_amt"].sum())
+    check("센터: 기간을 고르면 그 달만", analyze_center_csv(store, "1-08", "use_amt", [], {}, "2024-07", "2024-07").summary["total"], raw_total)
+    check("센터: 권역 합계는 두 달 합", region.summary["total"] > raw_total, True)
+    check("센터: 넣지 않은 달", analyze_center_csv(store, "1-08", start="2023", end="2023").status, "out_of_range")
+    check("센터: 일부 이름으로 조건", analyze_center_csv(store, "1-08", "use_amt", ["industry"], {"dong": "애월"}).evidence["filters"], {"dong": "애월"})
+    check("센터: 다른 곳에 있는 이름이면 되묻지 않음", analyze_center_csv(store, "1-08", "use_amt", ["userType"], {"dong": "추자", "industry": "골프장 운영업"}).status in ("ok", "not_found", "insufficient_sample"), True)
+    check("센터: 묶음은 2개까지", analyze_center_csv(store, "1-08", "use_amt", ["dong", "industry", "age"]).status, "invalid_request")
+    hours = analyze_center_csv(store, "4-15", "visit_pop", ["hour"])
+    check("센터: 시간대는 더하지 않고 평균", (hours.evidence["unit"], "평균" in hours.evidence["method"]), ("명", True))
+    check("센터: LLM 도구로 실행", execute_tool("analyze_center_csv", {"dataset": "1-08", "measure": "use_amt", "group_by": ["region"]}, store).status, "ok")
+    check("센터: 화면 세션 없으면 내려받기 안내", execute_tool("analyze_center_csv", {"dataset": "4-15"}).status, "center_only")
+
+    llm = ScriptedConversation([_tool("analyze_center_csv", dataset="1-08", measure="use_amt", group_by=["region"]), _done("권역별 이용금액입니다.")])
+    answer = Agent(llm, center_store=store).ask("넣은 카드 자료로 권역별 이용금액 보여줘")
+    check("센터: 대화에서 넣은 자료를 씀", answer.results[0].status, "ok")
+
+
+def _dup_error(store, data: bytes) -> str:
+    try:
+        store.load("again.csv", data)
+    except ValueError as exc:
+        return str(exc)
+    return ""
+
+
 def check_verify() -> None:
     result = get_trend("arrivals", start="2024", end="2024")
     check("맞는 숫자", unverified_numbers("2024년 입도객은 13,767,350명입니다.", [result]), [])
@@ -253,6 +361,7 @@ def check_expected_answers() -> None:
         "Q23": [rank_values("tourist_spending", "2025", "2025", top_n=5), get_trend("tourist_spending")],
         "Q24": [rank_values("vehicle_arrivals", "2025", "2025", top_n=5)],
         "Q25": [get_trend("cruise_passengers"), get_trend("cruise_passengers", {"passengerType": "외국인"})],
+        "Q26": [compare_periods("menu_sales", "2019", "2019", "2024", "2024", {"menu": "회류"}), compare_periods("menu_sales", "2023-01", "2023-10", "2024-01", "2024-10", {"menu": "회류"})],
     }
     questions = json.loads((PROJECT_ROOT / "reference" / "eval_questions.json").read_text(encoding="utf-8"))["questions"]
     for q in questions:
@@ -369,7 +478,7 @@ def check_claude_request() -> None:
         check("Claude: 모델과 대체 설정", (first["body"]["model"], first["body"]["fallbacks"], first["beta"]), ("claude-opus-5-5", "default", "server-side-fallback-2026-07-01"))
         check("Claude: 캐시와 노력 수준", (first["body"]["cache_control"], first["body"]["output_config"]), ({"type": "ephemeral"}, {"effort": "medium"}))
         check("Claude: 질문 사이에 공유할 시스템 프롬프트 저장 지점", first["body"]["system"][-1]["cache_control"], {"type": "ephemeral"})
-        check("Claude: 도구 수", len(first["body"]["tools"]), 10)
+        check("Claude: 도구 수", len(first["body"]["tools"]), 11)
         check("Claude: 생각 블록을 그대로 돌려보냄", second["body"]["messages"][1]["content"][0]["signature"], "sig")
         check("Claude: 도구 결과", second["body"]["messages"][2]["content"][0]["tool_use_id"], "toolu_1")
 
@@ -531,6 +640,22 @@ def check_app() -> None:
         app.chat_input[0].set_value("입도객?").run()
         check("앱: 예상 못한 오류 뒤 입력창 복구", ([e.value for e in app.exception], len(app.error), app.chat_input[0].disabled), ([], 1, False))
 
+        from agent.center import CenterStore
+        from scripts.make_center_sample import make_card, to_csv_bytes
+
+        store = CenterStore()
+        store.load("가상_1-08_202407.csv", to_csv_bytes(make_card("202407", seed=1, combos_per_cell=3)))
+        agent_module.make_conversation = lambda system, tools: ScriptedConversation([_tool("analyze_center_csv", dataset="1-08", measure="use_amt", group_by=["region"]), _done("가상 데이터 기준 권역별 이용금액입니다.")])
+        from streamlit.testing.v1 import AppTest
+
+        app = AppTest.from_file(str(PROJECT_ROOT / "app.py"), default_timeout=60)
+        app.session_state["center_store"] = store
+        app.run()
+        check("앱: 넣은 센터 자료 요약", any("1-08" in m.value and "가상 데이터" in m.value for m in app.sidebar.markdown), True)
+        app.chat_input[0].set_value("넣은 카드 자료로 권역별 이용금액").run()
+        check("앱: 센터 자료 답변", ([e.value for e in app.exception], _kinds(app, "plotly_chart"), _kinds(app, "download_button")), ([], 1, 1))
+        check("앱: 센터 자료 한계 표시", any("가상 데이터" in m.value for m in app.markdown), True)
+
         app = _app_test([])
         app.sidebar.radio[0].set_value("데이터 목록").run()
         check("앱: 데이터 목록", ([e.value for e in app.exception], any("분석할 수 있는 자료" in s.value for s in app.subheader)), ([], True))
@@ -546,6 +671,7 @@ def check_app() -> None:
 def main() -> int:
     sys.stdout.reconfigure(errors="replace")
     check_tools()
+    check_center()
     check_verify()
     check_expected_answers()
     check_loop()

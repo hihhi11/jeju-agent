@@ -172,6 +172,17 @@ SOURCES = {
         numeric=_names("visitorCnt"),
         dates=(("dtYearMonth", "%Y%m"),),
     ),
+    "foreign_short_stay": Source(
+        desc="읍면동 단위 외국인 단기체류 유동인구 (일·읍면동·국적, 한 달 약 123회 호출)",
+        api="hub",
+        url=f"{HUB}/t18b1bttt8abaDt51b8aat85ttaa8t5b",
+        unit="month",
+        params=_hub_range(_ymd),
+        default_range=("201801", "202608"),
+        sample=("20191020", "20191020"),
+        numeric=_names("visitPop"),
+        dates=(("baseDate", "%Y%m%d"),),
+    ),
     "asos_daily": Source(
         desc="기상청 ASOS 일자료 (제주·고산·성산·서귀포)",
         api="datago",

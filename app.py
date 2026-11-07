@@ -11,6 +11,7 @@ import duckdb
 import streamlit as st
 
 from agent.agent import Agent, AgentAnswer
+from agent.center import CenterStore
 from agent.common import ToolResult
 from agent.display import (
     build_figure,
@@ -71,6 +72,11 @@ def _state():
     state = st.session_state
     state.setdefault("messages", [])
     state.setdefault("pending", None)
+    # 센터 CSV는 파일로 저장하지 않고 이 세션의 메모리에만 둔다. 화면을 닫으면 사라진다
+    state.setdefault("center_store", CenterStore())
+    state.setdefault("center_loaded", set())
+    state.setdefault("center_uploader", 0)
+    state.setdefault("center_errors", [])
     return state
 
 
@@ -162,7 +168,7 @@ def run_pending() -> None:
         with st.spinner("자료를 찾아 계산하고 있습니다. 혼잡할 때는 1분 넘게 걸릴 수 있습니다."):
             try:
                 if "agent" not in state:
-                    state.agent = Agent()
+                    state.agent = Agent(center_store=state.center_store)
                 answer = state.agent.ask(question)
             except LLMError as exc:
                 answer = AgentAnswer(text=str(exc), status="llm_error")
@@ -216,12 +222,55 @@ def data_view() -> None:
         st.caption(result.summary["hubList"]["guide"])
 
 
+def _load_center_files() -> None:
+    """올린 파일 중 아직 넣지 않은 것만 확인해 넣는다. 오류는 다음 화면에 보여 준다."""
+    state = _state()
+    files = st.session_state.get(f"center_files_{state.center_uploader}") or []
+    errors = []
+    for file in files:
+        if file.file_id in state.center_loaded:
+            continue
+        state.center_loaded.add(file.file_id)
+        try:
+            state.center_store.load(file.name, file.getvalue())
+        except ValueError as exc:
+            errors.append(str(exc))
+        except Exception:
+            logging.exception("센터 CSV 읽기 실패")
+            errors.append(f"{file.name}: 파일을 읽지 못했습니다. 센터에서 내려받은 CSV인지 확인해 주세요.")
+    state.center_errors = errors
+
+
+def _clear_center() -> None:
+    state = _state()
+    state.center_store.clear()
+    state.center_loaded = set()
+    state.center_errors = []
+    # 올린 파일 목록도 비우려고 새 업로드 칸을 만든다
+    state.center_uploader += 1
+
+
+def center_panel(busy: bool) -> None:
+    state = _state()
+    with st.expander("센터 CSV 넣기", expanded=bool(state.center_store.files)):
+        st.caption("제주빅데이터센터에서 내려받은 카드 이용 현황(읍면동)_v02, 단기체류 외국인 유동인구(읍면동)_v02 CSV를 넣으면 질문에 함께 씁니다. 파일은 저장하지 않고 이 화면을 닫으면 지워집니다. 센터 반출 기준에 따라 사람 수가 10명 미만인 칸은 누구인지 짐작될 수 있어, 더 큰 단위(월→분기, 법정동→권역)로 묶거나 '값 가림'으로 표시합니다.")
+        st.file_uploader("CSV 파일", type="csv", accept_multiple_files=True, key=f"center_files_{state.center_uploader}", on_change=_load_center_files, disabled=busy, label_visibility="collapsed")
+        for error in state.center_errors:
+            st.error(error)
+        for item in state.center_store.summary():
+            mark = " (가상 데이터)" if item["virtual"] else ""
+            st.markdown(f"- {item['centerNo']} {item['title']}: {item['period']}, {item['months']}개월{mark}")
+        if state.center_store.files:
+            st.button("넣은 자료 지우기", key="center_clear", on_click=_clear_center, disabled=busy, width="stretch")
+
+
 def sidebar() -> str:
     state = _state()
     busy = bool(state.pending)
     with st.sidebar:
         view = st.radio("화면", [ASK_VIEW, DATA_VIEW], disabled=busy, label_visibility="collapsed")
         st.button("새 대화 시작", key="reset", on_click=_reset, disabled=busy, width="stretch")
+        center_panel(busy)
         if view == ASK_VIEW and state.messages:
             st.markdown("**예시 질문**")
             show_examples("side", 1)

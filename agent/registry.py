@@ -7,6 +7,7 @@ import traceback
 from jsonschema import Draft202012Validator
 
 from agent import tools
+from agent.center import SPECS as CENTER_SPECS, CenterStore, analyze_center_csv
 from agent.common import ToolResult
 from agent.metrics import METRICS
 
@@ -34,6 +35,7 @@ _FILTERS = {
         "spenderGroup": {"type": "string", "enum": ["관광객(추정)", "제주도민", "법인"]},
         "userType": {"type": "string", "enum": ["내국인", "제주도민", "법인", "중국", "일본", "동남아", "기타외국"]},
         "timeSlot": {"type": "string", "enum": ["오전", "점심", "오후", "저녁", "밤"]},
+        "menu": {"type": "string", "enum": ["밥류", "면류", "죽류", "국/탕/찌개/전골류", "구이류", "볶음류", "튀김류", "찜류", "조림류", "데침/삶음류", "적/꼬치류", "전/부침류", "만두류", "회류", "장/장아찌류", "냉채/무침류", "김치류", "묵류", "떡류", "빵/과자류", "과일/샐러드류", "주류", "음료류", "빙과류", "추가/사리", "기타"], "description": "외식 메뉴 대분류. 회는 회류, 고기는 구이류, 술은 주류, 커피는 음료류"},
         "region": {"type": "string", "description": "경기지수 지역 (전국, 제주, 서울 등 시도)"},
         "outlook": {"type": "string", "enum": ["체감", "전망"]},
         "area": {"type": "string", "description": "읍면동 (예: 애월읍, 연동). 음식점은 법정동(일도일동), 방문객·차량 도착은 행정동(일도1동)"},
@@ -161,6 +163,25 @@ TOOL_DEFINITIONS = [
             "keyword": {"type": "string", "description": "행사 이름에 들어갈 낱말 (예: 들불, 수국)"},
         },
     ),
+    _tool(
+        "analyze_center_csv",
+        "사용자가 제주빅데이터센터에서 내려받아 넣은 CSV를 집계한다. 1-08 카드 이용 현황(읍면동)_v02: 법정동·권역·업종·이용자·연령·성별별 이용금액(use_amt)·이용건수(use_cnt)·이용자수(user_cnt). "
+        "4-15 단기체류 외국인 유동인구(읍면동)_v02: 행정동·권역·국적·시간별 시간당 평균 방문인구(visit_pop). "
+        "CSV를 넣지 않았으면 center_only 와 내려받는 방법(summary.download)을 돌려준다. 10 미만 칸은 도구가 상위 단위로 묶거나 가리므로 묶음이 바뀔 수 있다(summary.groupBy).",
+        {
+            "dataset": {"type": "string", "enum": list(CENTER_SPECS)},
+            "measure": {"type": "string", "enum": sorted({m for s in CENTER_SPECS.values() for m in s.measures})},
+            "group_by": {"type": "array", "items": {"type": "string", "enum": sorted({d for s in CENTER_SPECS.values() for d in s.dims})}, "maxItems": 2, "description": "묶을 기준 2개까지. 순위나 비교 대상을 첫째로"},
+            "filters": {
+                "type": "object",
+                "description": "조건. 키는 group_by 와 같은 이름(month 는 YYYY-MM, dong 은 '애월' 처럼 일부만 써도 된다). userType 에 '외국인' 을 주면 외국 유형 4개를 합친다",
+                "additionalProperties": {"type": "string"},
+            },
+            "start": _MONTH,
+            "end": _MONTH,
+        },
+        ["dataset"],
+    ),
 ]
 
 _FUNCTIONS = {
@@ -178,15 +199,22 @@ _FUNCTIONS = {
 _VALIDATORS = {d["name"]: Draft202012Validator(d["input_schema"]) for d in TOOL_DEFINITIONS}
 
 
-def execute_tool(name: str, arguments: dict) -> ToolResult:
-    """도구를 실행한다. 잘못된 입력과 예외는 LLM이 고칠 수 있게 결과로 돌려준다."""
-    if name not in _FUNCTIONS:
+def execute_tool(name: str, arguments: dict, center_store: CenterStore | None = None) -> ToolResult:
+    """도구를 실행한다. 잘못된 입력과 예외는 LLM이 고칠 수 있게 결과로 돌려준다.
+
+    center_store 는 화면 세션에 넣은 센터 CSV다. 센터 도구에만 넘긴다.
+    """
+    if name == "analyze_center_csv":
+        function = lambda **kwargs: analyze_center_csv(center_store, **kwargs)  # noqa: E731
+    elif name in _FUNCTIONS:
+        function = _FUNCTIONS[name]
+    else:
         return ToolResult("invalid_request", f"없는 도구입니다: {name}")
     errors = sorted(_VALIDATORS[name].iter_errors(arguments), key=lambda e: list(e.absolute_path))
     if errors:
         return ToolResult("invalid_request", "입력이 올바르지 않습니다: " + "; ".join(e.message for e in errors[:3]))
     try:
-        return _FUNCTIONS[name](**arguments)
+        return function(**arguments)
     except ValueError as exc:
         return ToolResult("invalid_request", str(exc))
     except Exception:

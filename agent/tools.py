@@ -250,7 +250,7 @@ def find_data(query_text: str = "") -> ToolResult:
     }
     hub = load_hub_list()
     if hub is None:
-        summary["hubList"] = {"available": False, "guide": "허브 전체 목록 파일이 없습니다. 대회 페이지 데이터 탭에서 받아 data/raw/ 에 넣으면 찾을 수 있습니다."}
+        summary["hubList"] = {"available": False, "guide": "이 프로그램에는 허브 전체 목록이 들어 있지 않습니다. 이 프로그램에 없는 자료는 제주데이터허브(jejudatahub.net)에서 직접 검색하도록 안내합니다."}
     else:
         matched = [h for h in hub if tokens and any(tok in f"{h['title']} {h['category']}" for tok in tokens)]
         display_only["hubMatches"] = matched
@@ -277,6 +277,16 @@ def find_data(query_text: str = "") -> ToolResult:
     )
 
 
+def _center_download(center_no: str) -> dict:
+    """CSV를 넣어 분석할 수 있는 센터 자료는 내려받는 방법을 함께 알린다."""
+    from agent.center import SPECS
+
+    spec = SPECS.get(center_no)
+    if spec is None:
+        return {}
+    return {"alternatives": [{"tool": "analyze_center_csv", "dataset": center_no, "download": spec.download, "note": "센터에서 이 자료의 CSV를 내려받아 넣으면 analyze_center_csv 로 계산할 수 있다."}]}
+
+
 def describe_data(data_id: str) -> ToolResult:
     """F1. 데이터의 항목과 기간을 DB에서 읽어 설명한다. id 는 카탈로그 id 또는 센터 번호(1-01)다."""
     center = query("SELECT * FROM center_datasets WHERE centerNo = ?", [data_id])
@@ -290,6 +300,7 @@ def describe_data(data_id: str) -> ToolResult:
             summary={"title": info["title"], "category": info["category"], "provider": info["provider"], "exportable": bool(info["exportable"]), "description": info["description"]},
             evidence={"table": "center_datasets, center_columns", "rowCount": len(columns), "method": "센터 명세 v13 조회"},
             limits=["명세만 있고 데이터 자체는 없다.", "명세에 제공 기간 항목이 없다. 등록일은 데이터 기간이 아니다."],
+            **_center_download(data_id),
         )
     # LLM이 지표 ID를 넘겨도 찾을 수 있게 한다
     catalog_id = METRICS[data_id].catalog_id if data_id in METRICS else data_id
