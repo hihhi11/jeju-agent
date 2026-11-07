@@ -2,6 +2,7 @@
 
     python scripts/ask.py "2024년 제주 입도객은 전부 몇 명이야?"
     python scripts/ask.py          # 이어서 묻기. 빈 줄을 입력하면 끝난다
+    python scripts/ask.py "넣은 카드 자료로 업종별 이용금액" --center data/center_sample/가상_1-08_카드이용현황읍면동_202407.csv
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent.agent import Agent, AgentAnswer
+from agent.center import CenterStore
 from agent.llm import LLMError
 
 
@@ -28,10 +30,18 @@ def main() -> int:
     sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question", nargs="?")
+    parser.add_argument("--center", nargs="+", default=[], help="화면의 'CSV 넣기' 처럼 함께 넣을 센터 CSV 파일")
     args = parser.parse_args()
 
+    store = CenterStore()
+    for path in map(Path, args.center):
+        try:
+            store.load(path.name, path.read_bytes())
+        except ValueError as exc:
+            print(exc)
+            return 1
     try:
-        agent = Agent()
+        agent = Agent(center_store=store)
     except LLMError as exc:
         print(exc)
         return 1
