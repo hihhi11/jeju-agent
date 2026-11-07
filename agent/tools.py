@@ -21,7 +21,6 @@ from agent.metrics import (
     normalize_filters,
     resolve_spot_name,
 )
-from scripts.hub_list import load_hub_list
 
 STOPWORDS = {"데이터", "자료", "관련", "관련된", "뭐", "무엇", "어떤", "있어", "있나요", "볼", "수", "알려줘", "보고", "싶어"}
 # 거의 모든 자료에 들어 있는 말. 이 말만으로 찾으면 묻지 않은 자료가 찾은 것처럼 나온다
@@ -37,6 +36,8 @@ DAYS_OF_WEEK = ["월", "화", "수", "목", "금", "토", "일"]
 SMALL_BASE_RATIO = 0.25
 # 대상이 적으면(내국인·외국인 둘 등) 중앙값이 기준 구실을 못 해 작은 기준 표시를 하지 않는다
 SMALL_BASE_MIN_GROUPS = 5
+HUB_SEARCH_URL = "https://jejudatahub.net/data/list"
+HUB_SEARCH_GUIDE = f"이 프로그램에 없는 자료가 제주데이터허브에 있는지는 알 수 없다. 있다거나 없다고 짐작하지 말고, 허브 웹사이트({HUB_SEARCH_URL})에서 직접 검색하도록 안내한다."
 
 
 def _tokens(text: str) -> list[str]:
@@ -202,7 +203,7 @@ def _city_comparison(filters: dict, start: pd.Period, end: pd.Period) -> dict | 
 
 
 def find_data(query_text: str = "") -> ToolResult:
-    """F1. 질문 키워드로 쓸 수 있는 데이터, 센터 전용 명세, 허브 목록을 찾는다."""
+    """F1. 질문 키워드로 쓸 수 있는 데이터와 센터 전용 명세를 찾는다."""
     tokens = _tokens(query_text)
     tokens = [t for t in tokens if t not in GENERIC_TOKENS] or tokens
     catalog = query("SELECT * FROM data_catalog ORDER BY id")
@@ -239,8 +240,9 @@ def find_data(query_text: str = "") -> ToolResult:
 
     excluded = catalog[(catalog["status"] == "제외") & (catalog["score"] > 0)]
     limits = ["센터 전용 데이터는 명세만 있어 값을 계산할 수 없다."]
-    display_only: dict = {}
     summary = {
+        # 대회 제공 허브 목록은 제3자 제공이 금지되어 화면에도 보여 주지 않는다. 허브 웹사이트 검색만 안내한다
+        "hubSearch": HUB_SEARCH_GUIDE,
         "usableCount": len(rows),
         "centerMatchCount": len(center_rows),
         "centerMatches": center_rows[:10],
@@ -248,14 +250,6 @@ def find_data(query_text: str = "") -> ToolResult:
         "tokensOnlyInCenter": only_in_center,
         "tokensNotFound": not_found,
     }
-    hub = load_hub_list()
-    if hub is None:
-        summary["hubList"] = {"available": False, "guide": "이 프로그램에는 허브 전체 목록이 들어 있지 않습니다. 이 프로그램에 없는 자료는 제주데이터허브(jejudatahub.net)에서 직접 검색하도록 안내합니다."}
-    else:
-        matched = [h for h in hub if tokens and any(tok in f"{h['title']} {h['category']}" for tok in tokens)]
-        display_only["hubMatches"] = matched
-        # 목록 내용은 제3자 제공이 금지되어 LLM에는 건수만 알린다. 항목은 화면에 직접 보여 준다
-        summary["hubList"] = {"available": True, "matchCount": len(matched), "note": "허브 목록 항목은 사용자 화면에 표로 직접 표시된다. 이름을 추측해 말하지 말고 표를 보라고 안내한다. 목록에 있어도 이 에이전트로 분석할 수는 없다."}
 
     message = ""
     if combined:
@@ -273,7 +267,6 @@ def find_data(query_text: str = "") -> ToolResult:
         summary=summary,
         evidence={"table": "data_catalog, center_datasets", "rowCount": len(rows), "method": "키워드가 제목·키워드·설명·예시 질문에 들어 있는 항목 검색"},
         limits=limits,
-        display_only=display_only,
     )
 
 

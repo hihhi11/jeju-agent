@@ -20,14 +20,13 @@ from agent.display import (
     count_columns,
     csv_bytes,
     evidence_lines,
-    hub_frame,
     result_title,
     rows_frame,
     safe_markdown,
     visible_results,
 )
 from agent.llm import LLMError, current_model
-from agent.tools import find_data
+from agent.tools import HUB_SEARCH_URL, find_data
 
 EXAMPLES = [
     "서귀포시 관광지는 어느 달에 방문객이 가장 많아?",
@@ -109,11 +108,6 @@ def show_result(tool: str, result: ToolResult, key: str) -> None:
             formats = {c: st.column_config.NumberColumn(format="localized") for c in count_columns(frame)}
             st.dataframe(frame, hide_index=True, width="stretch", column_config=formats, key=f"table_{key}")
             st.download_button("CSV 내려받기", csv_bytes(frame), file_name=f"jeju_{tool}_{key}.csv", mime="text/csv", key=f"csv_{key}")
-    hub = hub_frame(result)
-    if hub is not None:
-        with st.expander(f"제주데이터허브 목록에서 찾은 자료 {len(hub)}건"):
-            st.caption("목록에 있어도 이 프로그램으로 분석할 수는 없습니다. 허브 목록은 화면에서만 볼 수 있습니다.")
-            st.dataframe(hub, hide_index=True, width="stretch", key=f"hub_{key}")
 
 
 def show_evidence(shown: list[tuple[str, ToolResult]]) -> None:
@@ -198,7 +192,7 @@ def ask_view() -> None:
 
 
 def data_view() -> None:
-    st.markdown("이 프로그램으로 바로 분석할 수 있는 자료입니다. 낱말로 찾으면 센터 전용 명세와 제주데이터허브 목록도 함께 찾습니다.")
+    st.markdown("이 프로그램으로 바로 분석할 수 있는 자료입니다. 낱말로 찾으면 제주빅데이터센터 전용 명세도 함께 찾습니다.")
     keyword = st.text_input("찾을 낱말", placeholder="예: 버스, 카드, 입도객", key="data_search").strip()
     result = find_data(keyword)
     if result.rows:
@@ -213,13 +207,8 @@ def data_view() -> None:
         st.subheader(f"제주빅데이터센터 전용 명세 {result.summary['centerMatchCount']}건 중 {len(centers)}건")
         st.caption("명세만 있어 값을 계산할 수 없습니다.")
         st.dataframe(rows_frame(centers), hide_index=True, width="stretch")
-    hub = hub_frame(result)
-    if hub is not None:
-        st.subheader(f"제주데이터허브 목록 {len(hub)}건")
-        st.caption("목록에 있어도 이 프로그램으로 분석할 수는 없습니다. 허브 목록은 화면에서만 볼 수 있습니다.")
-        st.dataframe(hub, hide_index=True, width="stretch")
-    elif keyword and not result.summary["hubList"]["available"]:
-        st.caption(result.summary["hubList"]["guide"])
+    if keyword:
+        st.caption(f"여기에 없는 자료는 [제주데이터허브]({HUB_SEARCH_URL})에서 직접 검색할 수 있습니다.")
 
 
 def _load_center_files() -> None:

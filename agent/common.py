@@ -50,8 +50,8 @@ class ToolResult:
     evidence: dict = field(default_factory=dict)
     limits: list[str] = field(default_factory=list)
     alternatives: list[dict] = field(default_factory=list)
-    # 화면에만 보여 주고 LLM에는 보내지 않는 값. 제3자 제공이 금지된 허브 목록이 여기에 들어간다
-    display_only: dict = field(default_factory=dict)
+    # LLM에 보낼 행 수. 묶음 중간에서 끊기지 않게 도구가 줄일 수 있다
+    llm_rows: int = LLM_MAX_ROWS
 
     def __post_init__(self):
         # 지수는 소수 첫째 자리까지 의미가 있어 반올림하지 않는다
@@ -64,14 +64,14 @@ class ToolResult:
         data = {
             "status": self.status,
             "message": self.message,
-            "rows": self.rows[:LLM_MAX_ROWS],
+            "rows": self.rows[: self.llm_rows],
             "summary": self.summary,
             "evidence": self.evidence,
             "limits": self.limits,
             "alternatives": self.alternatives,
         }
-        if len(self.rows) > LLM_MAX_ROWS:
-            data["rowsOmitted"] = len(self.rows) - LLM_MAX_ROWS
+        if len(self.rows) > self.llm_rows:
+            data["rowsOmitted"] = len(self.rows) - self.llm_rows
         return data
 
     def to_llm_json(self) -> str:

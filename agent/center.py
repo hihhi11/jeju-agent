@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from agent.common import ToolResult, invalid, month_range_text, parse_month, query
+from agent.common import LLM_MAX_ROWS, ToolResult, invalid, month_range_text, parse_month, query
 
 # 이 값보다 작은 칸은 그대로 내보내지 않는다 (제주데이터허브 반출 기준)
 THRESHOLD = 10
@@ -371,6 +371,43 @@ def _filter(spec: CenterSpec, frame: pd.DataFrame, filters: dict) -> tuple[pd.Da
     return frame, None
 
 
+TIME_DIMS = ("month", "quarter", "year", "hour")
+
+
+def _order_rows(table: pd.DataFrame, dims: list[str], labels: dict[str, str]) -> tuple[list[dict], int, str]:
+    """행 순서와 LLM에 보낼 행 수를 정한다.
+
+    두 차원으로 묶으면 업종·국적 같은 묶음끼리 붙여 값이 큰 묶음부터 둔다. 행이 많아 LLM에 다 못 보내면
+    묶음 경계에서 끊어, 한 업종의 7월 값만 가고 8월 값은 빠지는 일이 없게 한다.
+    """
+    if not dims:
+        return table.to_dict("records"), LLM_MAX_ROWS, ""
+    if len(dims) == 1:
+        ordered = table.sort_values(dims) if dims[0] in TIME_DIMS else table.sort_values("value", ascending=False, na_position="last")
+        return ordered.to_dict("records"), LLM_MAX_ROWS, ""
+    group = next((d for d in dims if d not in TIME_DIMS), None)
+    if group is None:
+        return table.sort_values(dims).to_dict("records"), LLM_MAX_ROWS, ""
+    other = dims[1] if group == dims[0] else dims[0]
+    totals = table.groupby(group)["value"].sum(min_count=1).fillna(-1)
+    ordered = table.assign(_rank=table[group].map(totals)).sort_values(["_rank", group, other], ascending=[False, True, True]).drop(columns="_rank")
+    rows = ordered.to_dict("records")
+    if len(rows) <= LLM_MAX_ROWS:
+        return rows, LLM_MAX_ROWS, ""
+    sizes = ordered.groupby(group, sort=False).size()
+    sent = groups = 0
+    for size in sizes:
+        if sent + size > LLM_MAX_ROWS:
+            break
+        sent += size
+        groups += 1
+    if groups == 0:
+        return rows, LLM_MAX_ROWS, ""
+    label = labels.get(group, group)
+    note = f"{label}이 많아 답변에는 값이 큰 {groups}개 {label}만 전달했다 (전체 {len(sizes)}개). 나머지 {label}은 화면의 표에 모두 있다."
+    return rows, sent, note
+
+
 def analyze_center_csv(
     store: CenterStore | None,
     dataset: str,
@@ -422,9 +459,10 @@ def analyze_center_csv(
     total_value = float(total["value"].iloc[0])
     if float(total["count"].iloc[0]) < THRESHOLD:
         return ToolResult("insufficient_sample", f"조건에 맞는 값이 {THRESHOLD} 미만이라 보여 줄 수 없습니다. 조건을 넓혀 주세요.", limits=list(COMMON_LIMITS))
-    rows = table.sort_values(dims) if dims and dims[0] in ("month", "quarter", "year", "hour") else table.sort_values("value", ascending=False, na_position="last")
-    rows = rows.to_dict("records")
+    rows, llm_rows, cut_note = _order_rows(table, dims, {k: d.label for k, d in spec.dims.items()})
     limits = list(COMMON_LIMITS) + [spec.basis] + list(spec.limits)
+    if cut_note:
+        limits.append(cut_note)
     if protection["merged"]:
         limits.append(f"{THRESHOLD}명 미만인 작은 칸을 하나로 합쳤다: {', '.join(protection['merged'])}.")
     if protection["rollups"]:
@@ -458,4 +496,5 @@ def analyze_center_csv(
             "table": f"사용자가 넣은 센터 CSV ({dataset})",
         },
         limits=limits,
+        llm_rows=llm_rows,
     )

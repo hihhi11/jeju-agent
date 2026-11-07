@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import collections
 import io
 import json
 import sys
@@ -23,7 +24,7 @@ import pandas as pd
 import agent.agent as agent_module
 from agent.agent import SYSTEM_PROMPT, Agent, AgentAnswer
 from agent.common import ToolResult, clean
-from agent.display import DIMMED_OPACITY, build_figure, chart_note, clarification_choices, count_columns, csv_bytes, evidence_lines, hub_frame, rows_frame, safe_markdown, visible_results
+from agent.display import DIMMED_OPACITY, build_figure, chart_note, clarification_choices, count_columns, csv_bytes, evidence_lines, rows_frame, safe_markdown, visible_results
 from agent.llm import ClaudeConversation, LLMError, OpenAICompatibleConversation, ToolCall, Turn
 from agent.registry import TOOL_DEFINITIONS, execute_tool
 from agent.common import query
@@ -58,7 +59,9 @@ def check_tools() -> None:
     check("Q19 없는 단위는 센터 전용", find_data("읍면동 카드").status, "center_only")
     check("Q02 명세 조회", describe_data("1-01").status, "center_only")
     check("Q02 반출 불가", describe_data("1-01").summary["exportable"], False)
-    check("허브 목록은 LLM에 보내지 않음", "hubMatches" in q02.to_llm_json(), False)
+    check("허브 목록은 화면과 LLM 어디에도 없고 허브 검색만 안내", ("hubMatches" in q02.to_llm_json(), "jejudatahub.net/data/list" in q02.summary["hubSearch"]), (False, True))
+    hub_q = find_data("허브 감귤")
+    check("허브에 있는지 물으면 허브 검색 안내 자료를 찾음", "hub_full_list" in [r["id"] for r in hub_q.rows] or "jejudatahub" in hub_q.to_llm_json(), True)
 
     check("자료 찾기: 없는 값을 다른 자료로 답하지 않음", (find_data("택시 이용 비율").rows, find_data("택시 이용 비율").summary["tokensNotFound"]), ([], ["택시"]))
     check("자료 찾기: 흔한 말만 있으면 전체에서 찾음", len(find_data("관광").rows) > 0, True)
@@ -292,6 +295,13 @@ def check_center() -> None:
         check(f"{name}: 값 가림을 쉬운 말로 설명하고 영문 열 이름은 쓰지 않음", (any(l.startswith("값 가림이란") for l in result.limits), any("suppressed" in l or "_v02" in l for l in result.limits + [result.evidence["label"]])), (True, False))
         hidden = any(r["suppressed"] for r in result.rows)
         check(f"{name}: 화면 표의 가림 열은 가린 칸이 있을 때만", "값 가림(10명 미만)" in rows_frame(result.rows).columns, hidden)
+
+    for group_by in (["industry", "month"], ["month", "industry"]):
+        wide = analyze_center_csv(store, "1-08", "use_amt", group_by, {"userType": "외국인"})
+        sent = json.loads(wide.to_llm_json())["rows"]
+        full = collections.Counter(r["industry"] for r in wide.rows)
+        part = collections.Counter(r["industry"] for r in sent)
+        check(f"센터 {'·'.join(group_by)}: 행이 많으면 업종 경계에서 끊어 두 달 값을 함께 보냄", (len(wide.rows) > len(sent), all(part[k] == full[k] for k in part), any("화면의 표에 모두" in l for l in wide.limits)), (True, True, True))
 
     nations = analyze_center_csv(store, "4-15", "visit_pop", ["nationality"])
     check("센터: 작은 국적은 합쳐서 순위 유지", (nations.summary["groupBy"], any(r["nationality"] == "그 밖의 국적" for r in nations.rows)), (["nationality"], True))
@@ -581,9 +591,6 @@ def check_display() -> None:
     answer = AgentAnswer("", tool_calls=[{"name": "get_trend", "arguments": {}, "status": "ok"}] * 2 + [{"name": "get_trend", "arguments": {"metric": "없음"}, "status": "invalid_request"}], results=[samples[0], samples[0], get_trend("없음")])
     check("화면: 다시 부른 결과와 입력 오류는 뺌", len(visible_results(answer)), 1)
 
-    hub_only = ToolResult("ok", display_only={"hubMatches": [{"title": "자료", "category": "분야", "owner": "기관", "periodText": "기간", "updatedDate": "날짜", "viewCount": 1}]})
-    check("화면: 허브 표는 정해진 열만", list(hub_frame(hub_only).columns), ["자료 이름", "분야", "제공 기관", "제공 기간", "갱신일"])
-    check("화면: 허브 항목은 LLM에 안 감", "자료 이름" in hub_only.to_llm_json() or "hubMatches" in hub_only.to_llm_json(), False)
 
 
 def _app_test(turns: list[Turn]):
@@ -661,9 +668,8 @@ def check_app() -> None:
         check("앱: 데이터 목록", ([e.value for e in app.exception], any("분석할 수 있는 자료" in s.value for s in app.subheader)), ([], True))
         app.text_input[0].set_value("카드").run()
         check("앱: 데이터 검색의 센터 전용 명세", ([e.value for e in app.exception], any("센터 전용" in s.value for s in app.subheader)), ([], True))
-        if find_data("버스").display_only.get("hubMatches"):
-            app.text_input[0].set_value("버스").run()
-            check("앱: 허브 목록은 표만 있고 내려받기 없음", (any("허브 목록" in s.value for s in app.subheader), _kinds(app, "download_button")), (True, 0))
+        app.text_input[0].set_value("버스").run()
+        check("앱: 허브 목록 표는 없고 허브 검색 링크만", (any("허브 목록" in s.value for s in app.subheader), any("jejudatahub.net/data/list" in c.value for c in app.caption)), (False, True))
     finally:
         agent_module.make_conversation = original
 

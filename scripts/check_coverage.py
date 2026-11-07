@@ -39,7 +39,6 @@ def main() -> int:
             if problem:
                 mismatched += 1
                 print(f"어긋남 {q['id']}: {q['coverage']} 인데 {status}")
-        # find_data 의 허브 목록 항목은 display_only 에만 있어 여기 찍히지 않는다
         print(f"{q['id']} {q['coverage']} {status} {first[:160]}")
 
     counts = collections.Counter(q["coverage"] for q in questions)

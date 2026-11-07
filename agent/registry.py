@@ -64,7 +64,7 @@ def _tool(name: str, description: str, properties: dict, required: list[str] | N
 TOOL_DEFINITIONS = [
     _tool(
         "find_data",
-        "질문에 맞는 데이터를 찾는다. 어떤 데이터가 있는지 묻거나 분석 가능한 자료인지 모를 때 쓴다. 센터 전용 명세와 허브 목록 검색 결과도 함께 돌려준다.",
+        "질문에 맞는 데이터를 찾는다. 어떤 데이터가 있는지 묻거나 분석 가능한 자료인지 모를 때 쓴다. 센터 전용 명세도 함께 돌려준다. 여기에 없는 자료가 허브에 있는지는 알 수 없다.",
         {"query_text": {"type": "string", "description": "질문의 핵심 키워드. 전체 목록을 보려면 빈 문자열"}},
     ),
     _tool(

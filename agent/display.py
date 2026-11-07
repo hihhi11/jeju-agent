@@ -119,7 +119,6 @@ EVIDENCE_LABELS = {
     "catalogId": "데이터 ID",
     "table": "사용한 표",
 }
-HUB_COLUMNS = {"title": "자료 이름", "category": "분야", "owner": "제공 기관", "periodText": "제공 기간", "updatedDate": "갱신일"}
 # 시험 전 값이나 입력 오류는 근거로 보여 주지 않는다
 HIDDEN_STATUSES = {"invalid_request", "error"}
 
@@ -181,14 +180,6 @@ def evidence_lines(result: ToolResult) -> list[tuple[str, str]]:
             value = ", ".join(f"{v}" for v in value.values())
         lines.append((label, f"{value:,}" if isinstance(value, int) else str(value)))
     return lines
-
-
-def hub_frame(result: ToolResult) -> pd.DataFrame | None:
-    """허브 목록 표. 제3자 제공이 금지되어 화면에만 보여 주고 내려받기를 두지 않는다."""
-    matches = result.display_only.get("hubMatches")
-    if not matches:
-        return None
-    return pd.DataFrame(matches)[list(HUB_COLUMNS)].rename(columns=HUB_COLUMNS)
 
 
 def clarification_choices(answer: AgentAnswer) -> list[str]:
